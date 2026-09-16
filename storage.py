@@ -104,6 +104,18 @@ class Ledger:
         return out
 
 
+def write_followups(rows: list[dict[str, Any]], out_path: str | Path) -> Path:
+    """Write matches the student has to finish by hand to CSV."""
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fields = ["score_percent", "title", "employer", "location", "reason", "url"]
+    with out.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    return out
+
+
 def write_report(rows: list[dict[str, Any]], out_path: str | Path) -> Path:
     """Write a ranked list of candidate jobs to CSV."""
     out = Path(out_path)

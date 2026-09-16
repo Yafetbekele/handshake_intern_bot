@@ -75,7 +75,13 @@ try:
         check("the SWE internship was kept", any("Software Engineering Intern" in t for t in titles))
         check("the veterinary posting was dropped", not any("Veterinary" in t for t in titles))
         check("the full-time role was dropped", not any("Senior Software Engineer" in t for t in titles))
-        check("the external posting was dropped", not any("Machine Learning Intern" in t for t in titles))
+        check("the posting needing a written answer is listed", any("Backend Engineering Intern" in t for t in titles))
+        check("the transcript posting is listed", any("Cloud Software Intern" in t for t in titles))
+        external_rows = [r for r in rows if "Machine Learning Intern" in r["title"]]
+        check(
+            "an external match, if listed, is labeled external",
+            all(r["apply_kind"] == "external" for r in external_rows),
+        )
 
     print()
     print("=" * 70)
@@ -105,6 +111,22 @@ try:
         print(f"  ledger statuses: {statuses}")
         check("dry run recorded, nothing marked applied", "applied" not in statuses, str(statuses))
         check("a dry_run entry exists", "dry_run" in statuses, str(statuses))
+        check("incomplete form marked needs_manual", "needs_manual" in statuses, str(statuses))
+
+    followup_file = DATA / "follow_up.csv"
+    check("follow-up list written", followup_file.exists())
+    if followup_file.exists():
+        followups = list(csv.DictReader(followup_file.open(encoding="utf-8")))
+        for row in followups:
+            print(f"  follow-up: {row['title']}  [{row['reason']}]")
+        check(
+            "posting with an unanswered question is in the follow-up list",
+            any("Backend Engineering Intern" in r["title"] for r in followups),
+        )
+        check(
+            "dry-run successes are not in the follow-up list",
+            not any("Software Engineering Intern" in r["title"] for r in followups),
+        )
 finally:
     server.shutdown()
     if DATA.exists():

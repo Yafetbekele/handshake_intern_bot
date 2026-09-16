@@ -5,6 +5,10 @@
 
   "resume_path": "resume.pdf",
   "resume_doc_name": "",
+  "cover_letter_path": "",
+  "cover_letter_doc_name": "",
+  "transcript_path": "",
+  "transcript_doc_name": "",
 
   "major": "",
   "extra_keywords": [],
@@ -12,7 +16,6 @@
 
   "summer_only": true,
   "internship_only": true,
-  "skip_external_applications": true,
 
   "min_match_score": 0.22,
   "max_applications_per_run": 15,

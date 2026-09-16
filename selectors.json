@@ -61,16 +61,6 @@
     ".modal-content"
   ],
 
-  "document_select": [
-    "div[role='dialog'] select",
-    "[data-hook='document-select']"
-  ],
-
-  "file_input": [
-    "div[role='dialog'] input[type='file']",
-    "input[type='file']"
-  ],
-
   "submit_button": [
     "div[role='dialog'] button[type='submit']",
     "button[data-hook='submit-application']"

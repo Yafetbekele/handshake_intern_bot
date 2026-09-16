@@ -28,8 +28,8 @@ from typing import Any
 import majors
 import matcher
 import resume_parser
-from handshake import HandshakeSession, Job
-from storage import Ledger, write_report
+from handshake import Documents, HandshakeSession, Job
+from storage import Ledger, write_followups, write_report
 
 HERE = Path(__file__).resolve().parent
 
@@ -38,12 +38,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "search_url_template": "{base}/stu/postings?query={query}&page={page}&per_page=25",
     "resume_path": "resume.pdf",
     "resume_doc_name": "",
+    "cover_letter_path": "",
+    "cover_letter_doc_name": "",
+    "transcript_path": "",
+    "transcript_doc_name": "",
     "major": "",
     "extra_keywords": [],
     "locations": [],
     "summer_only": True,
     "internship_only": True,
-    "skip_external_applications": True,
     "min_match_score": 0.22,
     "max_applications_per_run": 15,
     "max_search_pages": 4,
@@ -74,6 +77,8 @@ def load_config(args: argparse.Namespace) -> dict[str, Any]:
     # Command line beats the config file.
     for key, value in (
         ("resume_path", getattr(args, "resume", None)),
+        ("cover_letter_path", getattr(args, "cover_letter", None)),
+        ("transcript_path", getattr(args, "transcript", None)),
         ("major", getattr(args, "major", None)),
         ("handshake_base_url", getattr(args, "base_url", None)),
         ("min_match_score", getattr(args, "min_score", None)),
@@ -159,12 +164,8 @@ def gather_candidates(
         if not matcher.location_ok(job.location, list(config.get("locations", []))):
             print(f"{prefix} skip (location {job.location[:26]}): {job.title[:40]}")
             continue
-        if config.get("skip_external_applications", True) and job.apply_kind == "external":
-            print(f"{prefix} skip (external application): {job.title[:48]}")
-            ledger.record(
-                job_id, "skipped_external", job.title, job.employer,
-                job.location, job.url, 0.0, "external ATS",
-            )
+        if job.apply_kind in {"already_applied", "closed"}:
+            print(f"{prefix} skip ({job.apply_kind.replace('_', ' ')}): {job.title[:48]}")
             continue
 
         result = matcher.score_job(job.search_text, weights)
@@ -172,7 +173,8 @@ def gather_candidates(
             print(f"{prefix} skip ({result.percent}% match): {job.title[:52]}")
             continue
 
-        print(f"{prefix} KEEP ({result.percent}%): {job.label()[:68]}")
+        tag = "KEEP, apply on employer site" if job.apply_kind == "external" else "KEEP"
+        print(f"{prefix} {tag} ({result.percent}%): {job.label()[:60]}")
         kept.append((job, result))
 
     kept.sort(key=lambda pair: -pair[1].score)
@@ -205,6 +207,20 @@ def resolve_inputs(
         profile = resume_parser.extract(resume_path)
         print(profile.summary())
         config["resume_path"] = str(resume_path)
+
+        for key, label in (("cover_letter_path", "Cover letter"), ("transcript_path", "Transcript")):
+            raw = str(config.get(key, "") or "").strip()
+            if not raw:
+                continue
+            path = Path(raw).expanduser()
+            if not path.is_absolute() and (HERE / path).exists():
+                path = HERE / path
+            if path.exists():
+                config[key] = str(path)
+                print(f"  {label.lower():16s}: {path.name}")
+            else:
+                print(f"[warn] {label} not found, ignoring: {path}")
+                config[key] = ""
 
     major = majors.prompt_for_major(str(config.get("major", "")))
     return profile, major
@@ -288,21 +304,48 @@ def cmd_apply(args: argparse.Namespace) -> int:
         if not session.ensure_logged_in():
             return 1
 
-        kept = gather_candidates(
+        matches = gather_candidates(
             session, config, profile, major, ledger, int(args.scan)
         )
-        if not kept:
+        if not matches:
             print("\nNo postings cleared the filters. Nothing to apply to.")
             return 0
+
+        # Postings that hand off to the employer's own site can't be filled in
+        # here, but good matches are still worth the student's time.
+        followups: list[dict[str, Any]] = []
+        kept = []
+        for job, result in matches:
+            if job.apply_kind == "external":
+                ledger.record(
+                    job.job_id, "skipped_external", job.title, job.employer,
+                    job.location, job.url, result.score, "apply on employer site",
+                )
+                followups.append(followup_row(job, result, "apply on employer site"))
+            else:
+                kept.append((job, result))
+
+        documents = Documents(
+            resume_path=str(config.get("resume_path", "")),
+            resume_name=str(config.get("resume_doc_name", "")),
+            cover_letter_path=str(config.get("cover_letter_path", "")),
+            cover_letter_name=str(config.get("cover_letter_doc_name", "")),
+            transcript_path=str(config.get("transcript_path", "")),
+            transcript_name=str(config.get("transcript_doc_name", "")),
+        )
 
         cap = int(config.get("max_applications_per_run", 15))
         delay_low, delay_high = (
             list(config.get("delay_between_applications_seconds", [20, 45])) + [45]
         )[:2]
 
-        banner(f"Applying to up to {cap} of {len(kept)} matches")
+        banner(f"Applying to up to {cap} of {len(kept)} Handshake-hosted matches")
+        if followups:
+            print(f"{len(followups)} more matches apply on the employer's own site.")
         submitted = 0
         counts: dict[str, int] = {}
+        if followups:
+            counts["skipped_external"] = len(followups)
 
         for position, (job, result) in enumerate(kept):
             is_last = position == len(kept) - 1
@@ -327,18 +370,16 @@ def cmd_apply(args: argparse.Namespace) -> int:
                     counts["declined"] = counts.get("declined", 0) + 1
                     continue
 
-            status, note = session.apply(
-                job,
-                config["resume_path"],
-                str(config.get("resume_doc_name", "")),
-                dry_run=dry_run,
-            )
+            status, note = session.apply(job, documents, dry_run=dry_run)
             counts[status] = counts.get(status, 0) + 1
             ledger.record(
                 job.job_id, status, job.title, job.employer,
                 job.location, job.url, result.score, note,
             )
             print(f"  -> {status}: {note}")
+
+            if status in {"needs_manual", "failed", "uncertain"}:
+                followups.append(followup_row(job, result, f"{status}: {note}"))
 
             if status in {"applied", "dry_run", "uncertain"}:
                 submitted += 1
@@ -352,7 +393,28 @@ def cmd_apply(args: argparse.Namespace) -> int:
     for status, count in sorted(counts.items(), key=lambda kv: -kv[1]):
         print(f"  {status:24s} {count}")
     print(f"\nLedger: {ledger.total_applied()} applications recorded in total.")
+
+    if followups:
+        followups.sort(key=lambda row: -int(row["score_percent"]))
+        out = write_followups(followups, HERE / "data" / "follow_up.csv")
+        banner(f"{len(followups)} good matches to finish by hand")
+        for row in followups:
+            print(f"  {row['score_percent']:3d}%  {row['title']} @ {row['employer']}")
+            print(f"        {row['reason']}")
+            print(f"        {row['url']}")
+        print(f"\nSaved to {out}")
     return 0
+
+
+def followup_row(job: Job, result: matcher.MatchResult, reason: str) -> dict[str, Any]:
+    return {
+        "score_percent": result.percent,
+        "title": job.title,
+        "employer": job.employer,
+        "location": job.location,
+        "reason": reason,
+        "url": job.url,
+    }
 
 
 def cmd_history(args: argparse.Namespace) -> int:
@@ -376,6 +438,15 @@ def cmd_majors(args: argparse.Namespace) -> int:
 
 def add_shared_arguments(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--resume", help="path to your resume (PDF, DOCX or TXT)")
+    sub.add_argument(
+        "--cover-letter",
+        dest="cover_letter",
+        help="local cover letter uploaded when a posting requires one",
+    )
+    sub.add_argument(
+        "--transcript",
+        help="local transcript uploaded when a posting requires one",
+    )
     sub.add_argument("--major", help="skip the prompt and target this major")
     sub.add_argument(
         "--location",

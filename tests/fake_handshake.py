@@ -61,6 +61,46 @@ JOBS: dict[str, dict[str, str]] = {
         ),
         "external": "no",
     },
+    # Requires a cover letter and a written answer, so it must NOT be submitted.
+    "1005": {
+        "title": "Backend Engineering Intern - Summer 2027",
+        "employer": "Delta Systems",
+        "location": "Chicago, IL",
+        "body": (
+            "Summer internship on our backend platform. Build API services in "
+            "Python and Java, write tests, use Git and Docker, and join code "
+            "review. Data structures and algorithms coursework expected."
+        ),
+        "external": "no",
+        "extra": (
+            '<label for="cl">Cover letter *</label>'
+            '<select id="cl" required>'
+            '<option value="">Select a document</option>'
+            '<option value="c1">Cover Letter.pdf</option>'
+            "</select>"
+            '<label for="why">Why do you want to intern with us? *</label>'
+            '<textarea id="why" required></textarea>'
+        ),
+    },
+    # Requires a transcript, which is available as a saved document.
+    "1006": {
+        "title": "Cloud Software Intern - Summer 2027",
+        "employer": "Epsilon Cloud",
+        "location": "Remote",
+        "body": (
+            "Summer internship building cloud software in Python. Work on "
+            "distributed systems, backend API design, Docker and Git, with "
+            "code review from senior engineers. Algorithms coursework required."
+        ),
+        "external": "no",
+        "extra": (
+            "<label>Unofficial transcript (required)"
+            '<select id="tr">'
+            '<option value="">Select a document</option>'
+            '<option value="t1">Transcript Spring 2026.pdf</option>'
+            "</select></label>"
+        ),
+    },
 }
 
 POSTINGS_PAGE = """<!doctype html><html><head><title>Jobs</title></head><body>
@@ -87,6 +127,7 @@ JOB_PAGE = """<!doctype html><html><head><title>{title}</title></head><body>
     </select>
   </label>
   <input type="file" id="upload" />
+  {extra}
   <button type="submit" onclick="submitApp()">Submit Application</button>
 </div>
 
@@ -103,6 +144,10 @@ function submitApp() {{
   var done = document.getElementById('done');
   done.style.display = 'block';
   done.setAttribute('data-picked', picked);
+  var cl = document.getElementById('cl');
+  if (cl) done.setAttribute('data-cover', cl.value);
+  var tr = document.getElementById('tr');
+  if (tr) done.setAttribute('data-transcript', tr.value);
 }}
 </script>
 </body></html>"""
@@ -155,6 +200,7 @@ class Handler(BaseHTTPRequestHandler):
                     location=data["location"],
                     body=data["body"],
                     action=action,
+                    extra=data.get("extra", ""),
                 )
             )
             return

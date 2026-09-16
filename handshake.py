@@ -80,6 +80,124 @@ class Job:
         return f"{self.title or 'Untitled'} @ {employer} ({location})"
 
 
+DOCUMENT_KINDS = ("resume", "cover_letter", "transcript")
+
+DOCUMENT_KEYWORDS = {
+    "resume": ("resume", "résumé", "cv"),
+    "cover_letter": ("cover letter", "cover"),
+    "transcript": ("transcript",),
+}
+
+
+@dataclass
+class Documents:
+    """Files to attach. `*_name` picks a document already saved on Handshake;
+    `*_path` is a local file uploaded when no saved document matches."""
+
+    resume_path: str = ""
+    resume_name: str = ""
+    cover_letter_path: str = ""
+    cover_letter_name: str = ""
+    transcript_path: str = ""
+    transcript_name: str = ""
+
+    def name_for(self, kind: str) -> str:
+        return str(getattr(self, f"{kind}_name", "") or "").strip()
+
+    def path_for(self, kind: str) -> Path | None:
+        raw = str(getattr(self, f"{kind}_path", "") or "").strip()
+        if not raw:
+            return None
+        path = Path(raw).expanduser()
+        return path if path.exists() else None
+
+
+def classify_document_label(label: str) -> str:
+    """Map an upload slot's label to resume, cover_letter, transcript or unknown."""
+    text = " ".join(label.lower().split())
+    if "cover" in text:
+        return "cover_letter"
+    if "transcript" in text:
+        return "transcript"
+    if "resume" in text or "résumé" in text or re.search(r"\bcv\b", text):
+        return "resume"
+    return "unknown"
+
+
+# Label text for a form control, with the control's own option text removed.
+LABEL_JS = """
+(node) => {
+  const strip = (el) => {
+    if (!el) return '';
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll('select, option, input, textarea, button').forEach(e => e.remove());
+    return (copy.textContent || '').replace(/\\s+/g, ' ').trim();
+  };
+  if (node.id) {
+    const byFor = document.querySelector(`label[for="${CSS.escape(node.id)}"]`);
+    if (byFor) { const t = strip(byFor); if (t) return t; }
+  }
+  const aria = node.getAttribute('aria-label');
+  if (aria) return aria;
+  const labelledBy = node.getAttribute('aria-labelledby');
+  if (labelledBy) {
+    const el = document.getElementById(labelledBy);
+    if (el) { const t = strip(el); if (t) return t; }
+  }
+  const wrap = node.closest('label');
+  if (wrap) { const t = strip(wrap); if (t) return t; }
+  let parent = node.parentElement;
+  for (let i = 0; i < 3 && parent; i++) {
+    const t = strip(parent);
+    if (t) return t.slice(0, 160);
+    parent = parent.parentElement;
+  }
+  return node.getAttribute('name') || node.getAttribute('placeholder') || '';
+}
+"""
+
+# Every required control in the dialog that is still empty.
+MISSING_REQUIRED_JS = """
+(dialog) => {
+  const labelOf = LABEL_FN;
+  const missing = [];
+  const seenGroups = new Set();
+  const flaggedByLabel = (el) => {
+    const text = labelOf(el) || '';
+    return /\\*|\\brequired\\b/i.test(text) && !/optional/i.test(text);
+  };
+  for (const el of dialog.querySelectorAll('input, textarea, select')) {
+    const type = (el.getAttribute('type') || el.tagName).toLowerCase();
+    if (['hidden', 'submit', 'button', 'reset', 'image', 'search'].includes(type)) continue;
+    if (el.disabled) continue;
+    const required = el.required || el.getAttribute('aria-required') === 'true' || flaggedByLabel(el);
+    if (!required) continue;
+
+    if (type === 'radio') {
+      const key = el.name || labelOf(el);
+      if (seenGroups.has(key)) continue;
+      seenGroups.add(key);
+      const group = el.name
+        ? dialog.querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`)
+        : [el];
+      if (![...group].some(r => r.checked)) missing.push(labelOf(el));
+      continue;
+    }
+    if (type === 'checkbox') {
+      if (!el.checked) missing.push(labelOf(el));
+      continue;
+    }
+    if (type === 'file') {
+      if (!el.files || el.files.length === 0) missing.push(labelOf(el));
+      continue;
+    }
+    if (!String(el.value || '').trim()) missing.push(labelOf(el));
+  }
+  return missing.map(t => (t || 'unlabeled field').slice(0, 80));
+}
+""".replace("LABEL_FN", LABEL_JS.strip())
+
+
 class HandshakeSession:
     """Owns the browser context and all page interaction."""
 
@@ -372,15 +490,34 @@ class HandshakeSession:
     def apply(
         self,
         job: Job,
-        resume_path: str | Path,
-        resume_doc_name: str = "",
+        documents: Documents,
         dry_run: bool = False,
     ) -> tuple[str, str]:
-        """Attempt one application. Returns (status, note)."""
+        """Attempt one application. Returns (status, note).
+
+        Statuses: applied, dry_run, needs_manual, uncertain, failed, and
+        skipped_external / skipped_already_applied / skipped_closed.
+        Nothing is ever submitted while a required field is still empty.
+        """
         assert self.page is not None
 
         if job.apply_kind == "external":
             return "skipped_external", "posting redirects to an external site"
+
+        # Always act on this job's own page. Scoring loads many postings in a
+        # row, so the browser is usually sitting on a different one.
+        if not self._on_job_page(job):
+            try:
+                self.page.goto(job.url, wait_until="domcontentloaded")
+            except PlaywrightTimeout:
+                return "failed", "job page timed out"
+            self._settle(900)
+            if not self._on_job_page(job):
+                return "failed", f"could not open job page {job.url}"
+            job.apply_kind = self._detect_apply_kind()
+            if job.apply_kind == "external":
+                return "skipped_external", "posting redirects to an external site"
+
         if job.apply_kind == "already_applied":
             return "skipped_already_applied", "Handshake shows an existing application"
         if job.apply_kind == "closed":
@@ -402,7 +539,12 @@ class HandshakeSession:
                 return ("dry_run" if dry_run else "applied"), "single-click apply"
             return "failed", "no application dialog appeared"
 
-        attach_note = self._attach_resume(resume_path, resume_doc_name)
+        attached, attach_note = self._attach_documents(documents)
+
+        missing = self._missing_required_fields(attached)
+        if missing:
+            self._dismiss_dialog()
+            return "needs_manual", "unanswered required: " + "; ".join(missing[:5])
 
         if dry_run:
             self._dismiss_dialog()
@@ -411,7 +553,7 @@ class HandshakeSession:
         submit = self._submit_button()
         if submit is None:
             self._dismiss_dialog()
-            return "failed", f"no Submit button found ({attach_note})"
+            return "needs_manual", f"Submit is unavailable, the form likely wants more ({attach_note})"
 
         try:
             submit.click()
@@ -424,62 +566,144 @@ class HandshakeSession:
             return "applied", attach_note
         return "uncertain", f"submitted but no confirmation seen ({attach_note})"
 
-    def _attach_resume(self, resume_path: str | Path, resume_doc_name: str = "") -> str:
-        """Pick an existing Handshake resume, or upload the local file."""
+    def _on_job_page(self, job: Job) -> bool:
         assert self.page is not None
-        resume_path = Path(resume_path).expanduser()
-        wanted = (resume_doc_name or resume_path.stem).lower()
+        match = JOB_ID_RE.search(self.page.url or "")
+        return bool(match and match.group(1) == job.job_id)
 
-        # 1. A native <select> of saved documents.
-        select = self._first_visible("document_select", timeout=1500)
-        if select is not None:
-            try:
-                options = select.locator("option")
-                for index in range(options.count()):
-                    label = (options.nth(index).inner_text() or "").strip()
-                    if not label or label.lower().startswith("select"):
-                        continue
-                    if wanted in label.lower() or "resume" in label.lower():
-                        select.select_option(label=label)
-                        return f"selected saved document '{label}'"
-            except Exception:
-                pass
+    # ---------------------------------------------------------------- documents
 
-        # 2. A radio / card list of saved documents.
+    def _dialog_root(self) -> Locator | None:
+        return self._first_visible("dialog", timeout=1500)
+
+    def _label_for(self, locator: Locator) -> str:
         try:
-            radios = self.page.locator(
-                "div[role='dialog'] input[type='radio'], div[role='dialog'] [role='radio']"
-            )
-            for index in range(min(radios.count(), 12)):
-                radio = radios.nth(index)
-                label = ""
-                try:
-                    label = radio.evaluate(
-                        "node => (node.closest('label') || node.parentElement)?.innerText || ''"
-                    )
-                except Exception:
-                    pass
-                if wanted in label.lower() or "resume" in label.lower():
-                    radio.check(force=True)
-                    clean = " ".join(label.split())[:60]
-                    return f"selected saved document '{clean}'"
+            return str(locator.evaluate(LABEL_JS) or "")
         except Exception:
-            pass
+            return ""
 
-        # 3. Upload the local file.
-        if resume_path.exists():
-            for selector in self._sel("file_input"):
-                try:
-                    file_input = self.page.locator(selector).first
-                    if file_input.count() == 0:
-                        continue
-                    file_input.set_input_files(str(resume_path))
-                    self.page.wait_for_timeout(2500)
-                    return f"uploaded {resume_path.name}"
-                except Exception:
+    @staticmethod
+    def _pick_option(options: list[str], kind: str, wanted_name: str) -> str | None:
+        """Choose a saved document for `kind` from a list of option labels."""
+        usable = [
+            o for o in options
+            if o.strip() and not re.match(r"^\s*(select|choose|--)", o, re.IGNORECASE)
+        ]
+        if wanted_name:
+            for option in usable:
+                if wanted_name.lower() in option.lower():
+                    return option
+        for keyword in DOCUMENT_KEYWORDS.get(kind, ()):
+            for option in usable:
+                if keyword in option.lower():
+                    return option
+        return None
+
+    def _attach_documents(self, documents: Documents) -> tuple[set[str], str]:
+        """Fill every document slot in the dialog. Returns (kinds attached, note)."""
+        assert self.page is not None
+        dialog = self._dialog_root()
+        scope = dialog if dialog is not None else self.page.locator("body")
+        attached: set[str] = set()
+        notes: list[str] = []
+
+        # 1. Dropdowns of documents already saved on Handshake.
+        selects = scope.locator("select")
+        for index in range(min(selects.count(), 10)):
+            select = selects.nth(index)
+            label = self._label_for(select)
+            kind = classify_document_label(label)
+            try:
+                option_texts = [
+                    (t or "").strip()
+                    for t in select.locator("option").all_inner_texts()
+                ]
+            except Exception:
+                continue
+
+            # Unlabeled document pickers are assumed to be the resume slot,
+            # but only when the options actually look like documents.
+            if kind == "unknown":
+                if "resume" in attached or not any(
+                    k in o.lower() for o in option_texts for k in ("resume", ".pdf", ".docx")
+                ):
                     continue
+                kind = "resume"
+            if kind in attached:
+                continue
 
-        return "no resume field found; posting may not require one"
+            choice = self._pick_option(option_texts, kind, documents.name_for(kind))
+            if choice is None:
+                continue
+            try:
+                select.select_option(label=choice)
+                attached.add(kind)
+                notes.append(f"{kind.replace('_', ' ')}: '{choice}'")
+            except Exception:
+                continue
+
+        # 2. Radio or card lists of saved documents.
+        radios = scope.locator("input[type='radio'], [role='radio']")
+        for index in range(min(radios.count(), 20)):
+            radio = radios.nth(index)
+            label = self._label_for(radio)
+            kind = classify_document_label(label)
+            candidates = [kind] if kind != "unknown" else list(DOCUMENT_KINDS)
+            for candidate in candidates:
+                if candidate in attached:
+                    continue
+                if self._pick_option([label], candidate, documents.name_for(candidate)):
+                    try:
+                        radio.check(force=True)
+                        attached.add(candidate)
+                        notes.append(f"{candidate.replace('_', ' ')}: '{label[:50]}'")
+                    except Exception:
+                        pass
+                    break
+
+        # 3. Upload local files into any slot still empty.
+        file_inputs = scope.locator("input[type='file']")
+        for index in range(min(file_inputs.count(), 6)):
+            file_input = file_inputs.nth(index)
+            kind = classify_document_label(self._label_for(file_input))
+            if kind == "unknown":
+                kind = "resume"
+            if kind in attached:
+                continue
+            path = documents.path_for(kind)
+            if path is None:
+                continue
+            try:
+                file_input.set_input_files(str(path))
+                self.page.wait_for_timeout(2500)
+                attached.add(kind)
+                notes.append(f"{kind.replace('_', ' ')}: uploaded {path.name}")
+            except Exception:
+                continue
+
+        note = ", ".join(notes) if notes else "no document fields filled"
+        return attached, note
+
+    def _missing_required_fields(self, attached: set[str]) -> list[str]:
+        """Labels of required fields still empty, ignoring satisfied document slots."""
+        dialog = self._dialog_root()
+        if dialog is None:
+            return []
+        try:
+            labels = list(dialog.evaluate(MISSING_REQUIRED_JS) or [])
+        except Exception:
+            return []
+
+        missing: list[str] = []
+        for label in labels:
+            kind = classify_document_label(label)
+            # A saved-document choice satisfies the matching upload box too.
+            if kind in attached:
+                continue
+            clean = " ".join(str(label).replace("*", " ").split())
+            if clean and clean not in missing:
+                missing.append(clean)
+        return missing
 
     def _submit_button(self) -> Locator | None:
         assert self.page is not None

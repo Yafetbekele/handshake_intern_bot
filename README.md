@@ -92,6 +92,23 @@ Fully automatic, capped at 10:
 python main.py apply --resume resume.pdf --auto-submit --max 10
 ```
 
+Some postings ask for a cover letter or transcript. Give the tool local copies
+to upload, or name documents already saved on Handshake in `config.json`:
+
+```bash
+python main.py apply --resume resume.pdf --cover-letter cover_letter.pdf --transcript transcript.pdf
+```
+
+### What gets submitted and what doesn't
+
+Before submitting, the tool fills every document slot it can recognize, then
+checks the form for required fields that are still empty. If anything required
+is left, such as a written question, it closes the form without submitting.
+
+Nothing is ever sent with a required field blank. Those postings, plus good
+matches that make you apply on the employer's own website, are printed at the
+end of the run and saved to `data/follow_up.csv` so you can finish them by hand.
+
 ## Other commands
 
 ```bash
@@ -110,6 +127,8 @@ skipped or declined.
 | Flag | Meaning |
 | --- | --- |
 | `--resume PATH` | Your resume as PDF, DOCX or TXT. |
+| `--cover-letter PATH` | Uploaded when a posting requires a cover letter. |
+| `--transcript PATH` | Uploaded when a posting requires a transcript. |
 | `--major NAME` | Skip the prompt and target this major. |
 | `--location CITY` | Preferred location, repeatable. Remote postings always pass. |
 | `--min-score 0.15` | Lower the match threshold when too little gets through. |
@@ -134,7 +153,8 @@ matched so you can see why a posting ranked where it did.
 
 A posting also has to clear hard filters before it is scored at all. It must
 read as an internship or co-op, mention summer, match a location preference if
-you set one, and not hand off to an external applicant tracking system.
+you set one, and still be open. Matches that apply on the employer's own site
+are kept for your follow-up list rather than dropped.
 
 If almost nothing gets through, lower `--min-score` to around `0.12` and raise
 `--pages`. If junk gets through, raise it toward `0.35`.
@@ -151,6 +171,11 @@ copy config.example.json config.json
 `resume_doc_name` is worth setting. Upload your resume to Handshake once under
 Documents, put its exact name here, and the tool picks that saved document
 instead of uploading a fresh copy for every application.
+
+`cover_letter_doc_name` and `transcript_doc_name` work the same way.
+`cover_letter_path` and `transcript_path` are the local files used when no saved
+document matches. Without any of these, the tool still picks a saved document
+whose name contains "cover letter" or "transcript" if the form requires one.
 
 ## When it breaks
 
@@ -175,7 +200,8 @@ number and `{query}` in place of your search text:
 ## Tests
 
 None of these touch the real Handshake. The browser tests run against a local
-mock served from `tests/fake_handshake.py`.
+mock served from `tests/fake_handshake.py`. They also run automatically on
+GitHub for every push, from `.github/workflows/tests.yml`.
 
 ```bash
 python tests/smoke_test.py
@@ -198,15 +224,17 @@ python tests/cli_test.py
 | `matcher.py` | Scoring and the internship, summer and location filters. |
 | `majors.py` | Major to search terms and keywords, with the prompt. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
-| `storage.py` | Application ledger and CSV export. |
+| `storage.py` | Application ledger, follow-up list and CSV export. |
 | `selectors.json` | CSS fallbacks, the part to edit when Handshake changes. |
 | `config.example.json` | Template for `config.json`. |
 
 ## Limits worth knowing
 
-- Postings that redirect to an employer's own site are skipped, not applied to.
-  They are logged so you can do those by hand.
-- Postings with extra required questions or a required cover letter may submit
-  without them or fail outright. Watch the first few runs.
+- Postings on an employer's own site and forms with written questions are never
+  filled in here. They land in `data/follow_up.csv` for you to finish.
+- Required fields are detected from the form's own markings. A question that is
+  required but not marked that way can't be seen, so watch the first few runs.
 - Nothing here writes a cover letter or edits your resume per posting.
+- The selectors were tested against a mock of Handshake, not the live site.
+  Expect to adjust `selectors.json` on your first real run.
 - `data/applied.json` is what stops repeat applications. Keep it.
