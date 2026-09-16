@@ -20,6 +20,33 @@ is yours to weigh. Three things reduce it a lot:
 Start with `search` and `--dry-run`. Only move to real submissions once you
 have seen that the matches it picks are ones you would have picked yourself.
 
+## Easiest way to start: double-click
+
+Double-click **Start Internship Assistant.bat** in this folder. No terminal
+commands are needed.
+
+1. The first time, it offers to download what it needs. This takes a few
+   minutes once.
+2. A window opens. Pick your resume, pick or type your major, and choose what
+   it should do:
+   - **See my matches only** ranks internships and applies to nothing.
+   - **Practice run** fills in applications but submits nothing.
+   - **Apply, asking me before each one** stops for a yes or no in the black
+     window before every submission.
+   - **Apply automatically** submits without asking, after a warning.
+3. Click **Start**. A browser opens on Handshake. Sign in there the first time.
+4. When it finishes, it offers to open your results in Excel.
+
+The window remembers your choices for next time. The black window that stays
+open is where progress shows up and where you answer yes or no in the "asking
+me" mode.
+
+For a desktop icon, right-click the .bat file, choose **Show more options**,
+then **Send to**, then **Desktop (create shortcut)**.
+
+Everything below is the command line version, which does the same thing with
+more options.
+
 ## Install
 
 ```bash
@@ -215,10 +242,16 @@ python tests/browser_test.py
 python tests/cli_test.py
 ```
 
+```bash
+python tests/launcher_test.py
+```
+
 ## Files
 
 | File | Role |
 | --- | --- |
+| `Start Internship Assistant.bat` | The double-click starting point. |
+| `launcher.py` | The window behind the double-click, plus first-time setup. |
 | `main.py` | Command line interface and the run loop. |
 | `handshake.py` | Playwright driver: login, search, job pages, submission. |
 | `matcher.py` | Scoring and the internship, summer and location filters. |

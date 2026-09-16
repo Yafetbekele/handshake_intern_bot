@@ -30,3 +30,6 @@ jobs:
 
       - name: End-to-end command line tests
         run: python tests/cli_test.py
+
+      - name: Double-click launcher tests
+        run: python tests/launcher_test.py
