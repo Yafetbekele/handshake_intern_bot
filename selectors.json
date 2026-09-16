@@ -1,0 +1,84 @@
+{
+  "_comment": "Handshake changes its DOM often. Each entry is a list of CSS selectors tried in order. Playwright role/text locators are tried first in code; these are the fallbacks. If the tool stops finding things, open devtools on Handshake, copy the right selector, and put it at the front of the matching list.",
+
+  "logged_in_marker": [
+    "a[href*='/stu/postings']",
+    "nav a[href*='/stu/']",
+    "[data-hook='global-nav']"
+  ],
+
+  "login_marker": [
+    "form[action*='login']",
+    "input[type='password']",
+    "a[href*='/login']"
+  ],
+
+  "job_card_link": [
+    "a[href*='/stu/jobs/']",
+    "a[href*='/jobs/']",
+    "[data-hook='jobs-card'] a"
+  ],
+
+  "job_title": [
+    "h1",
+    "[data-hook='details-heading']",
+    "[data-hook='job-title']"
+  ],
+
+  "job_employer": [
+    "[data-hook='details-subtitle'] a",
+    "a[href*='/stu/employers/']",
+    "[data-hook='employer-name']"
+  ],
+
+  "job_location": [
+    "[data-hook='job-location']",
+    "[data-hook='details-subtitle']",
+    "div[class*='location']"
+  ],
+
+  "job_description": [
+    "[data-hook='details-body']",
+    "[data-hook='job-description']",
+    "main",
+    "body"
+  ],
+
+  "apply_button": [
+    "button[data-hook='apply-button']",
+    "button[aria-label*='Apply']",
+    "a[data-hook='apply-button']"
+  ],
+
+  "external_apply_marker": [
+    "a[data-hook='external-apply']",
+    "a[target='_blank'][href^='http']:has-text('Apply')"
+  ],
+
+  "dialog": [
+    "div[role='dialog']",
+    "[data-hook='modal']",
+    ".modal-content"
+  ],
+
+  "document_select": [
+    "div[role='dialog'] select",
+    "[data-hook='document-select']"
+  ],
+
+  "file_input": [
+    "div[role='dialog'] input[type='file']",
+    "input[type='file']"
+  ],
+
+  "submit_button": [
+    "div[role='dialog'] button[type='submit']",
+    "button[data-hook='submit-application']"
+  ],
+
+  "success_marker": [
+    "[data-hook='application-success']",
+    "text=Application submitted",
+    "text=You applied"
+  ]
+}

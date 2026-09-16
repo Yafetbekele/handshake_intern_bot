@@ -1,0 +1,15 @@
+# Saved login session, application ledger and CSV exports
+data/
+
+# Your personal settings and resume
+config.json
+*.pdf
+*.docx
+
+# Chromium noise
+debug.log
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/

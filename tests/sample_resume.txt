@@ -1,0 +1,25 @@
+Jane Doe
+jane.doe@university.edu | github.com/janedoe | linkedin.com/in/janedoe
+
+EDUCATION
+State University, B.S. Computer Science, expected May 2028
+Relevant coursework: Data Structures, Algorithms, Operating Systems, Linear Algebra
+
+SKILLS
+Languages: Python, Java, C++, JavaScript, SQL
+Frameworks: React, Node, Flask, FastAPI
+Tools: Git, GitHub, Docker, AWS, PostgreSQL, Linux
+Libraries: pandas, NumPy, PyTorch, scikit-learn
+
+EXPERIENCE
+Undergraduate Research Assistant, Machine Learning Lab
+Built a deep learning pipeline in PyTorch for computer vision experiments.
+Wrote Python tooling for data analysis and data visualization of results.
+
+Software Engineering Intern, Local Startup
+Developed REST API endpoints in Flask and a React frontend.
+Improved unit testing coverage and set up continuous integration with Docker.
+
+PROJECTS
+Full stack web development project: React frontend, Node backend, PostgreSQL database.
+Distributed systems course project implementing a replicated key value store.
