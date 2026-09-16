@@ -91,8 +91,50 @@ def build_weights(
     return weights
 
 
-def score_job(job_text: str, weights: dict[str, float]) -> MatchResult:
-    """Fraction of the weighted vocabulary that the posting mentions."""
+TITLE_BONUS = 0.25
+
+# Words too generic to say which field a job title belongs to.
+GENERIC_TITLE_WORDS = {
+    "intern", "interns", "internship", "internships", "summer", "co", "op", "coop",
+    "engineering", "engineer", "science", "sciences", "studies", "management",
+    "administration", "systems", "analyst", "associate", "program", "and", "of",
+    "the", "for", "in", "assistant", "research", "student", "services", "general",
+}
+
+
+def title_terms_for(major_name: str, queries: list[str]) -> list[str]:
+    """Field words to look for in job titles, from the major and its searches.
+
+    Electrical Engineering with searches like "firmware intern" gives
+    ["electrical", "hardware", "embedded", "firmware"].
+    """
+    terms: list[str] = []
+    for phrase in [major_name, *queries]:
+        for word in re.findall(r"[a-z][a-z&+#]*", phrase.lower()):
+            if len(word) > 2 and word not in GENERIC_TITLE_WORDS and word not in terms:
+                terms.append(word)
+    return terms
+
+
+def score_job(
+    job_text: str,
+    weights: dict[str, float],
+    title: str = "",
+    title_terms: list[str] | tuple[str, ...] = (),
+) -> MatchResult:
+    """Fraction of the weighted vocabulary that the posting mentions, plus a
+    fixed bonus when the job title itself names the student's field."""
+    result = _vocabulary_score(job_text, weights)
+    if title and title_terms:
+        title_words = set(re.findall(r"[a-z][a-z&+#]*", title.lower()))
+        hits = [t for t in title_terms if t in title_words]
+        if hits:
+            result.score = min(result.score + TITLE_BONUS, 1.0)
+            result.reasons.append(f"title mentions {', '.join(hits)}")
+    return result
+
+
+def _vocabulary_score(job_text: str, weights: dict[str, float]) -> MatchResult:
     if not weights:
         return MatchResult(score=0.0)
 
@@ -130,10 +172,56 @@ def is_internship(title: str, body: str = "") -> bool:
     return _matches_any(body[:4000], INTERN_PATTERNS)
 
 
-def is_summer(title: str, body: str = "") -> bool:
+MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+_MONTH = r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+
+# "From May 30, 2027 to August 7, 2027" (job panel) and "May 29—Aug 6" (result card).
+DATE_RANGE_PATTERNS = [
+    re.compile(rf"\bfrom\s+{_MONTH}\.?\s+\d{{1,2}}(?:,?\s*\d{{4}})?\s+to\s+{_MONTH}\b", re.IGNORECASE),
+    re.compile(rf"\b{_MONTH}\.?\s+\d{{1,2}}\s*[—–-]+\s*{_MONTH}\.?\s+\d{{1,2}}\b", re.IGNORECASE),
+]
+
+OTHER_SEASON_TITLE = re.compile(r"\b(fall|autumn|spring|winter)\b", re.IGNORECASE)
+OTHER_SEASON_BODY = re.compile(
+    r"\b(fall|autumn|spring|winter)\s+(20\d\d|semester|term|co-?op|internship|session|quarter)\b",
+    re.IGNORECASE,
+)
+
+
+def summer_status(title: str, body: str = "") -> str:
+    """Classify a posting's timing as 'summer', 'other' or 'unknown'.
+
+    Explicit dates win. Then the title, then the description. Postings that
+    never say when they run come back 'unknown' rather than being guessed.
+    """
+    text = body[:8000] if body else ""
+    for pattern in DATE_RANGE_PATTERNS:
+        match = pattern.search(title) or pattern.search(text)
+        if match:
+            start = MONTHS.get(match.group(1).lower().rstrip("."), 0)
+            end = MONTHS.get(match.group(2).lower().rstrip("."), 0)
+            return "summer" if 5 <= start <= 7 and 6 <= end <= 9 else "other"
+
     if _matches_any(title, SUMMER_PATTERNS):
-        return True
-    return _matches_any(body[:6000], SUMMER_PATTERNS)
+        return "summer"
+    if OTHER_SEASON_TITLE.search(title):
+        return "other"
+    if _matches_any(text, SUMMER_PATTERNS):
+        return "summer"
+    if OTHER_SEASON_BODY.search(text):
+        return "other"
+    return "unknown"
+
+
+def is_summer(title: str, body: str = "", include_undated: bool = True) -> bool:
+    """True for summer postings, and for undated ones unless told otherwise."""
+    status = summer_status(title, body)
+    return status == "summer" or (status == "unknown" and include_undated)
 
 
 def location_ok(job_location: str, wanted: list[str]) -> bool:

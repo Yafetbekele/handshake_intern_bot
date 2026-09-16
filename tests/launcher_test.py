@@ -7,10 +7,14 @@ Run from the project root:
 from __future__ import annotations
 
 import csv
+import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+# Keep the student's real "apply yourself" list untouched.
+os.environ["HSBOT_MANUAL_DIR"] = tempfile.mkdtemp(prefix="hsbot_manual_")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

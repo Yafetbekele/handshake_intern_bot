@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -29,13 +30,32 @@ import majors
 import matcher
 import resume_parser
 from handshake import Documents, HandshakeSession, Job
-from storage import Ledger, write_followups, write_report
+from storage import MANUAL_FOLDER_NAME, Ledger, ManualList, write_followups, write_report
 
 HERE = Path(__file__).resolve().parent
 
+
+def manual_list() -> ManualList:
+    """The lasting list of good internships to apply to by hand."""
+    folder = os.environ.get("HSBOT_MANUAL_DIR") or str(HERE / MANUAL_FOLDER_NAME)
+    return ManualList(folder)
+
+
+def manual_reason(status: str, note: str) -> str:
+    if status == "skipped_external":
+        return "Apply on the employer's website"
+    if status == "no_apply_button":
+        return "No Apply button found on Handshake"
+    if status == "needs_manual":
+        detail = note.split("unanswered required:", 1)[-1].strip()
+        return f"Asks for something the assistant can't fill in: {detail}"
+    if status == "uncertain":
+        return f"May already be submitted, check the posting before applying ({note})"
+    return f"The assistant couldn't finish this one ({note})"
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "handshake_base_url": "https://app.joinhandshake.com",
-    "search_url_template": "{base}/stu/postings?query={query}&page={page}&per_page=25",
+    "search_url_template": "",
     "resume_path": "resume.pdf",
     "resume_doc_name": "",
     "cover_letter_path": "",
@@ -46,6 +66,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "extra_keywords": [],
     "locations": [],
     "summer_only": True,
+    "include_undated_internships": True,
     "internship_only": True,
     "min_match_score": 0.22,
     "max_applications_per_run": 15,
@@ -124,12 +145,20 @@ def gather_candidates(
     weights = matcher.build_weights(
         profile, major.keywords, list(config.get("extra_keywords", []))
     )
+    title_terms = matcher.title_terms_for(major.name, list(major.queries))
     print(f"Scoring vocabulary: {len(weights)} terms")
+    print(f"Job titles get a boost for: {', '.join(title_terms) or 'nothing'}")
 
     queries = list(major.queries) or [f"{major.name} intern"]
     banner(f"Searching Handshake for {major.name} internships")
     job_ids = session.collect_job_ids(queries, int(config.get("max_search_pages", 4)))
     print(f"\n{len(job_ids)} unique postings found across {len(queries)} searches.")
+    if not job_ids:
+        print(
+            "No postings were listed. If Handshake shows internships for these searches\n"
+            "in your normal browser, its page layout has probably changed. See\n"
+            "'When it breaks' in the README."
+        )
 
     fresh = [j for j in job_ids if not ledger.applied(j)]
     if len(fresh) != len(job_ids):
@@ -157,7 +186,7 @@ def gather_candidates(
             print(f"{prefix} skip (not an internship): {job.title[:58]}")
             continue
         if config.get("summer_only", True) and not matcher.is_summer(
-            job.title, job.description
+            job.title, job.description, bool(config.get("include_undated_internships", True))
         ):
             print(f"{prefix} skip (not summer): {job.title[:58]}")
             continue
@@ -168,7 +197,7 @@ def gather_candidates(
             print(f"{prefix} skip ({job.apply_kind.replace('_', ' ')}): {job.title[:48]}")
             continue
 
-        result = matcher.score_job(job.search_text, weights)
+        result = matcher.score_job(job.search_text, weights, job.title, title_terms)
         if result.score < min_score:
             print(f"{prefix} skip ({result.percent}% match): {job.title[:52]}")
             continue
@@ -267,6 +296,16 @@ def cmd_search(args: argparse.Namespace) -> int:
             }
         )
 
+    manual = manual_list()
+    for job, result in kept:
+        if job.apply_kind in {"external", "unknown"}:
+            status = "skipped_external" if job.apply_kind == "external" else "no_apply_button"
+            manual.add(job.job_id, job.title, job.employer, job.location, job.url,
+                       result.score, manual_reason(status, ""))
+    if len(manual):
+        page = manual.save()
+        print(f"\nInternships to apply to yourself ({len(manual)}): {page}")
+
     if rows:
         out = write_report(rows, HERE / "data" / args.report)
         print(f"\nReport written to {out}")
@@ -314,6 +353,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         # Postings that hand off to the employer's own site can't be filled in
         # here, but good matches are still worth the student's time.
         followups: list[dict[str, Any]] = []
+        manual = manual_list()
         kept = []
         for job, result in matches:
             if job.apply_kind == "external":
@@ -322,6 +362,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
                     job.location, job.url, result.score, "apply on employer site",
                 )
                 followups.append(followup_row(job, result, "apply on employer site"))
+                manual.add(job.job_id, job.title, job.employer, job.location, job.url,
+                           result.score, manual_reason("skipped_external", ""))
             else:
                 kept.append((job, result))
 
@@ -380,6 +422,10 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
             if status in {"needs_manual", "failed", "uncertain"}:
                 followups.append(followup_row(job, result, f"{status}: {note}"))
+                manual.add(job.job_id, job.title, job.employer, job.location, job.url,
+                           result.score, manual_reason(status, note))
+            elif status == "applied":
+                manual.remove(job.job_id)
 
             if status in {"applied", "dry_run", "uncertain"}:
                 submitted += 1
@@ -403,6 +449,10 @@ def cmd_apply(args: argparse.Namespace) -> int:
             print(f"        {row['reason']}")
             print(f"        {row['url']}")
         print(f"\nSaved to {out}")
+
+    if len(manual) or manual.json_path.exists():
+        page = manual.save()
+        print(f"\nAll internships to apply to yourself ({len(manual)} so far): {page}")
     return 0
 
 

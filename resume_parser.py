@@ -28,6 +28,12 @@ STOPWORDS = {
     "gpa", "present", "current", "expected", "relevant", "coursework",
     "project", "projects", "work", "worked", "team", "teams", "responsible",
     "including", "various", "strong", "excellent", "ability", "resume", "cv",
+    # clubs, honors and filler that job ads repeat without meaning a skill match
+    "student", "students", "leadership", "leader", "community", "national",
+    "high", "cross", "events", "event", "supported", "organized", "country",
+    "member", "members", "club", "society", "president", "volunteer",
+    "volunteered", "award", "awards", "honors", "dean", "list", "activities",
+    "involvement", "repair", "help", "helped", "new", "year",
     "email", "phone", "linkedin", "github", "com", "org", "www", "http",
     "https", "january", "february", "march", "april", "may", "june", "july",
     "august", "september", "october", "november", "december",

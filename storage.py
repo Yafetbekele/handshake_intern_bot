@@ -129,3 +129,127 @@ def write_report(rows: list[dict[str, Any]], out_path: str | Path) -> Path:
         writer.writeheader()
         writer.writerows(rows)
     return out
+
+
+MANUAL_FOLDER_NAME = "Internships to apply to yourself"
+
+
+class ManualList:
+    """Good internships the tool could not apply to, kept across runs.
+
+    Lives in its own folder so it is easy to find. Each save writes a page with
+    clickable links (apply_yourself.html), a spreadsheet copy
+    (apply_yourself.csv), and the data behind them (list.json). A posting drops
+    off the list once the tool applies to it.
+    """
+
+    def __init__(self, folder: str | Path) -> None:
+        self.folder = Path(folder)
+        self.json_path = self.folder / "list.json"
+        self.csv_path = self.folder / "apply_yourself.csv"
+        self.html_path = self.folder / "apply_yourself.html"
+        self._items: dict[str, dict[str, Any]] = {}
+        try:
+            raw = json.loads(self.json_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                self._items = raw
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def add(
+        self,
+        job_id: str,
+        title: str,
+        employer: str,
+        location: str,
+        url: str,
+        score: float,
+        reason: str,
+    ) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        existing = self._items.get(job_id, {})
+        self._items[job_id] = {
+            "job_id": job_id,
+            "title": title or existing.get("title", ""),
+            "employer": employer or existing.get("employer", ""),
+            "location": location or existing.get("location", ""),
+            "url": url or existing.get("url", ""),
+            "score": round(max(float(score), float(existing.get("score", 0))), 4),
+            "reason": reason,
+            "first_seen": existing.get("first_seen", now),
+            "last_seen": now,
+        }
+
+    def remove(self, job_id: str) -> None:
+        self._items.pop(job_id, None)
+
+    def items(self) -> list[dict[str, Any]]:
+        return sorted(self._items.values(), key=lambda r: (-float(r.get("score", 0)), r.get("title", "")))
+
+    def save(self) -> Path:
+        self.folder.mkdir(parents=True, exist_ok=True)
+        rows = self.items()
+        self.json_path.write_text(json.dumps(self._items, indent=2, sort_keys=True), encoding="utf-8")
+
+        fields = ["score_percent", "title", "employer", "location", "reason", "url", "first_seen", "last_seen"]
+        with self.csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(dict(row, score_percent=round(float(row.get("score", 0)) * 100)))
+
+        self.html_path.write_text(_manual_list_html(rows), encoding="utf-8")
+        return self.html_path
+
+
+def _manual_list_html(rows: list[dict[str, Any]]) -> str:
+    from html import escape
+
+    body = []
+    for row in rows:
+        percent = round(float(row.get("score", 0)) * 100)
+        url = escape(str(row.get("url", "")), quote=True)
+        body.append(
+            "<tr>"
+            f"<td class='num'>{percent}%</td>"
+            f"<td><a href='{url}' target='_blank' rel='noopener'>{escape(str(row.get('title', '')))}</a></td>"
+            f"<td>{escape(str(row.get('employer', '')))}</td>"
+            f"<td>{escape(str(row.get('location', '')))}</td>"
+            f"<td>{escape(str(row.get('reason', '')))}</td>"
+            f"<td class='when'>{escape(str(row.get('first_seen', ''))[:10])}</td>"
+            "</tr>"
+        )
+    table = "\n".join(body) or "<tr><td colspan='6'>Nothing here yet.</td></tr>"
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Internships to apply to yourself</title>
+<style>
+  :root {{ color-scheme: light dark; --fg:#1b1b1f; --muted:#5f6068; --line:#e3e3e8; --bg:#fff; --accent:#1f5fd6; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --fg:#ececf1; --muted:#a4a5ad; --line:#34343b; --bg:#17171b; --accent:#8ab4ff; }} }}
+  body {{ margin:0; padding:24px 16px; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }}
+  main {{ max-width:1100px; margin:0 auto; }}
+  h1 {{ font-size:22px; margin:0 0 4px; }}
+  p {{ color:var(--muted); margin:0 0 18px; }}
+  .wrap {{ overflow-x:auto; }}
+  table {{ border-collapse:collapse; width:100%; }}
+  th, td {{ text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }}
+  th {{ font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }}
+  a {{ color:var(--accent); font-weight:600; text-decoration:none; }}
+  a:hover {{ text-decoration:underline; }}
+  .num {{ font-variant-numeric:tabular-nums; white-space:nowrap; }}
+  .when {{ color:var(--muted); white-space:nowrap; }}
+</style></head>
+<body><main>
+<h1>Internships to apply to yourself</h1>
+<p>{len(rows)} good matches the assistant could not apply to for you, best match first. Each link opens the posting on Handshake.</p>
+<div class="wrap"><table>
+<thead><tr><th>Match</th><th>Internship</th><th>Employer</th><th>Location</th><th>Why it's here</th><th>Found</th></tr></thead>
+<tbody>
+{table}
+</tbody></table></div>
+</main></body></html>
+"""

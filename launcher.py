@@ -352,16 +352,37 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
 # ----------------------------------------------------------------------- run
 
 
+def manual_list_page() -> Path:
+    folder = os.environ.get("HSBOT_MANUAL_DIR") or str(HERE / "Internships to apply to yourself")
+    return Path(folder) / "apply_yourself.html"
+
+
+def _open(path: Path) -> None:
+    try:
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        print(f"Open this file: {path}")
+
+
 def offer_results(mode: str, started_at: float) -> None:
+    page = manual_list_page()
+    if page.exists() and page.stat().st_mtime >= started_at:
+        if _message(
+            "yesno",
+            "Done",
+            "Open your list of internships to apply to yourself?\n\n"
+            "These are good matches the assistant couldn't apply to for you. "
+            "The list opens in your web browser with a link to each posting.",
+        ):
+            _open(page)
+        return
+
     path = result_file(mode)
     if not path.exists() or path.stat().st_mtime < started_at:
         return
     label = "your ranked matches" if mode == "search" else "the jobs to finish by hand"
     if _message("yesno", "Done", f"Open {label}?\n\n{path.name} opens in Excel or your spreadsheet app."):
-        try:
-            os.startfile(str(path))  # type: ignore[attr-defined]
-        except (AttributeError, OSError):
-            print(f"Results: {path}")
+        _open(path)
 
 
 def run(

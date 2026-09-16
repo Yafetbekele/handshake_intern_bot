@@ -1,7 +1,7 @@
 {
   "handshake_base_url": "https://app.joinhandshake.com",
 
-  "search_url_template": "{base}/stu/postings?query={query}&page={page}&per_page=25",
+  "search_url_template": "",
 
   "resume_path": "resume.pdf",
   "resume_doc_name": "",
@@ -15,6 +15,7 @@
   "locations": [],
 
   "summer_only": true,
+  "include_undated_internships": true,
   "internship_only": true,
 
   "min_match_score": 0.22,

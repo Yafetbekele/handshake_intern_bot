@@ -93,6 +93,10 @@ python main.py search --resume "C:\Users\you\Documents\resume.pdf"
 It asks for your major, showing a numbered list of 27 majors with tuned search
 terms. You can type any other major instead and it searches on that name.
 
+It searches the way you would. It opens Handshake's job search, types each
+search into the box, and turns on the Internship filter. It then reuses the
+address Handshake produced for the rest of the run.
+
 To skip the prompt:
 
 ```bash
@@ -128,13 +132,37 @@ python main.py apply --resume resume.pdf --cover-letter cover_letter.pdf --trans
 
 ### What gets submitted and what doesn't
 
-Before submitting, the tool fills every document slot it can recognize, then
-checks the form for required fields that are still empty. If anything required
-is left, such as a written question, it closes the form without submitting.
+Handshake's application form has one section per document, such as "Attach your
+resume" and "Attach your cover letter". The tool fills each section like this:
 
-Nothing is ever sent with a required field blank. Those postings, plus good
-matches that make you apply on the employer's own website, are printed at the
-end of the run and saved to `data/follow_up.csv` so you can finish them by hand.
+- **Resume.** Handshake usually attaches your default resume already. If not,
+  the tool picks a saved resume or uploads the one you gave it.
+- **Transcript.** It picks a saved transcript, or uploads the one you gave it.
+- **Cover letter.** It only attaches one you named or gave it. It never guesses,
+  because a letter written for one employer shouldn't go to another.
+
+Then it checks for anything still empty, such as a document section or a
+required question like a phone number. If something is left, it closes the
+form without submitting.
+
+**Practice runs never press "Quick apply".** On Handshake that button can send
+the application in a single click. In the real modes it is pressed like any
+other Apply button.
+
+### Internships to apply to yourself
+
+Good matches the tool can't apply to go into a folder named **Internships to
+apply to yourself**, next to this README. That covers postings that apply on the
+employer's own website, and forms with questions or documents the tool won't
+fill in.
+
+- Double-click `apply_yourself.html` for a page with a link to each posting,
+  best match first. `apply_yourself.csv` has the same list for Excel.
+- The list grows across runs without duplicates.
+- A posting drops off once the tool applies to it.
+
+The launcher offers to open this page when a run finishes. Each run's own
+summary is also saved to `data/follow_up.csv`.
 
 ## Other commands
 
@@ -178,10 +206,23 @@ matched so you can see why a posting ranked where it did.
 | Tool or topic detected in your resume | 1.5 |
 | Word used repeatedly in your resume | 1.0 |
 
-A posting also has to clear hard filters before it is scored at all. It must
-read as an internship or co-op, mention summer, match a location preference if
-you set one, and still be open. Matches that apply on the employer's own site
-are kept for your follow-up list rather than dropped.
+On top of that, a job whose title names your field gets a flat 25 point boost.
+For Electrical Engineering that means titles containing electrical, hardware,
+embedded or firmware. Job descriptions are often generic, so the title is the
+most reliable clue.
+
+A posting also has to clear hard filters before it is scored at all:
+
+- **It must be an internship or co-op.**
+- **It must run in summer.** Handshake lists dates like "From May 30, 2027 to
+  August 7, 2027". Postings that clearly run in fall, winter or spring are
+  dropped. Postings with no dates at all are kept, unless you set
+  `include_undated_internships` to false.
+- **It must match your locations,** if you set any.
+- **It must still be open.**
+
+Matches that apply on the employer's own site are kept for your apply-yourself
+list rather than dropped.
 
 If almost nothing gets through, lower `--min-score` to around `0.12` and raise
 `--pages`. If junk gets through, raise it toward `0.35`.
@@ -201,8 +242,8 @@ instead of uploading a fresh copy for every application.
 
 `cover_letter_doc_name` and `transcript_doc_name` work the same way.
 `cover_letter_path` and `transcript_path` are the local files used when no saved
-document matches. Without any of these, the tool still picks a saved document
-whose name contains "cover letter" or "transcript" if the form requires one.
+document matches. Without them, the tool still picks a saved transcript when a
+form requires one. It never picks a cover letter you didn't name.
 
 ## When it breaks
 
@@ -214,20 +255,29 @@ To repair it: open the page in Chrome, inspect the element it can no longer
 find, and add the working selector to the front of the matching list. No Python
 changes needed.
 
-The most common failure is search returning nothing. Handshake's filter query
-parameters change often. The reliable fix is to search on Handshake by hand
-with the filters you want, copy the URL from the address bar, and put it in
-`config.json` as `search_url_template` with `{page}` in place of the page
-number and `{query}` in place of your search text:
+The tool tells you plainly when something outside its control stops it:
+
+- **"Handshake is showing a security check."** Handshake's bot protection
+  stepped in. The tool stops rather than trying to get around it. Try again
+  later, or apply in your normal browser.
+- **"Could not find Handshake's job search box"** or **"redirected the job
+  search".** Handshake changed its search page.
+
+If search breaks, set the search address yourself. Search on Handshake by hand
+with the filters you want and copy the address from the address bar. Put it in
+`config.json` as `search_url_template`, with `{query}` in place of your search
+words and `{page}` in place of the page number. Drop the job number after
+`/job-search`:
 
 ```json
-"search_url_template": "{base}/stu/postings?query={query}&page={page}&per_page=25"
+"search_url_template": "{base}/job-search?query={query}&per_page=25&sort=relevance&page={page}&jobType=3"
 ```
 
 ## Tests
 
 None of these touch the real Handshake. The browser tests run against a local
-mock served from `tests/fake_handshake.py`. They also run automatically on
+mock served from `tests/fake_handshake.py`. Its layout copies Handshake's real
+job search and application form as they looked in September 2026. They also run automatically on
 GitHub for every push, from `.github/workflows/tests.yml`.
 
 ```bash
@@ -257,17 +307,23 @@ python tests/launcher_test.py
 | `matcher.py` | Scoring and the internship, summer and location filters. |
 | `majors.py` | Major to search terms and keywords, with the prompt. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
-| `storage.py` | Application ledger, follow-up list and CSV export. |
+| `storage.py` | Application ledger, apply-yourself list and CSV export. |
 | `selectors.json` | CSS fallbacks, the part to edit when Handshake changes. |
 | `config.example.json` | Template for `config.json`. |
 
 ## Limits worth knowing
 
-- Postings on an employer's own site and forms with written questions are never
-  filled in here. They land in `data/follow_up.csv` for you to finish.
+- Most internships on Handshake apply on the employer's own website. The tool
+  can't fill those in, so they go on your apply-yourself list.
+- Written questions, phone numbers and other personal fields are never filled
+  in. Those forms go on your apply-yourself list too.
 - Required fields are detected from the form's own markings. A question that is
   required but not marked that way can't be seen, so watch the first few runs.
 - Nothing here writes a cover letter or edits your resume per posting.
-- The selectors were tested against a mock of Handshake, not the live site.
-  Expect to adjust `selectors.json` on your first real run.
+- **What has been checked on the real site:** search, result pages, job
+  details, the three Apply button types, and opening and filling the
+  application form in a practice run.
+- **What hasn't:** an actual submission, the confirmation Handshake shows
+  afterward, and what "Quick apply" does when pressed. Use "Apply, asking me
+  before each one" for your first real applications and watch what happens.
 - `data/applied.json` is what stops repeat applications. Keep it.

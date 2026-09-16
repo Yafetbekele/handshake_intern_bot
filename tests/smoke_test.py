@@ -14,7 +14,31 @@ sys.path.insert(0, str(ROOT))
 import majors
 import matcher
 import resume_parser
-from storage import Ledger
+from storage import Ledger, ManualList
+
+with tempfile.TemporaryDirectory() as _tmp:
+    print("=" * 70)
+    print("0. APPLY-YOURSELF LIST")
+    print("=" * 70)
+    folder = Path(_tmp) / "Internships to apply to yourself"
+    items = ManualList(folder)
+    items.add("9", "Power Intern <b>", "Volt & Co", "Onsite, based in Austin, TX", "https://app.joinhandshake.com/job-search/9", 0.4, "Apply on the employer's website")
+    items.add("8", "Chip Intern", "Silicon", "Remote", "https://app.joinhandshake.com/job-search/8", 0.6, "Asks for something the assistant can't fill in: Why us?")
+    items.add("9", "Power Intern <b>", "Volt & Co", "", "", 0.3, "Apply on the employer's website")
+    page = items.save()
+    reloaded = ManualList(folder)
+    assert len(reloaded) == 2, "a repeat sighting must not duplicate an entry"
+    assert reloaded.items()[0]["job_id"] == "8", "best match first"
+    assert reloaded.items()[1]["score"] == 0.4 and reloaded.items()[1]["url"].endswith("/9"), "keep best score and link"
+    html_text = page.read_text(encoding="utf-8")
+    assert "href='https://app.joinhandshake.com/job-search/8'" in html_text
+    assert "Power Intern &lt;b&gt;" in html_text and "Volt &amp; Co" in html_text, "text is escaped"
+    reloaded.remove("8")
+    reloaded.save()
+    assert len(ManualList(folder)) == 1, "applied postings drop off"
+    print("  saved, deduplicated, ordered, escaped, removed")
+    print("  OK")
+    print()
 
 RESUME = Path(__file__).with_name("sample_resume.txt")
 
@@ -91,6 +115,17 @@ assert strong.score > partial.score > weak.score, (strong.score, partial.score, 
 assert strong.score > 0.22, "strong match should clear the default threshold"
 assert weak.score < 0.22, "weak match should fail the default threshold"
 print("  OK (ranking is strong > partial > weak)")
+
+ee = majors.resolve("Electrical Engineering")
+ee_terms = matcher.title_terms_for(ee.name, ee.queries)
+plain = matcher.score_job("Generic company description.", weights)
+boosted = matcher.score_job("Generic company description.", weights, "Electrical Engineering Internship", ee_terms)
+unrelated = matcher.score_job("Generic company description.", weights, "Marketing Intern", ee_terms)
+print(f"  title boost: plain {plain.percent}%, EE title {boosted.percent}%, unrelated title {unrelated.percent}%")
+assert "electrical" in ee_terms and "intern" not in ee_terms and "engineering" not in ee_terms
+assert boosted.score >= plain.score + 0.24 and unrelated.score == plain.score
+assert any("electrical" in r for r in boosted.reasons)
+print("  OK (field words in the title add a boost)")
 
 print()
 print("=" * 70)

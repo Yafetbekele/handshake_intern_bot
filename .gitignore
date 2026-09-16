@@ -13,3 +13,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Your personal list of internships to apply to by hand
+Internships to apply to yourself/
