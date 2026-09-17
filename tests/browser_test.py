@@ -386,6 +386,47 @@ try:
             check("the answer was kept for next time",
                   any("sponsorship" in " ".join(a["match"]).lower() for a in session.last_learned_answers),
                   str(session.last_learned_answers))
+
+            print()
+            print("=" * 70)
+            print("22. REMOVING INTERNSHIPS FROM THE APPLY-YOURSELF PAGE")
+            print("=" * 70)
+            from storage import ManualList
+
+            listing = ManualList(Path(tmp) / "Internships to apply to yourself")
+            listing.add("9001", "FPGA Engineering Intern", "HPR", "Remote", "https://example.com/9001", 0.9,
+                        "Apply on the employer's website")
+            listing.add("9002", "Firmware Intern", "Allegion", "Indiana", "https://example.com/9002", 0.8,
+                        "Apply on the employer's website")
+            page_path = listing.save()
+            page = session.page
+            page.goto(page_path.resolve().as_uri())
+            row = page.locator("tr[data-id='9001']")
+            check("both internships shown at first", page.locator("#count").inner_text() == "2 shown")
+            row.get_by_role("button", name="Remove").click()
+            check("removed internship disappears", not row.is_visible())
+            check("count updates", page.locator("#count").inner_text() == "1 shown, 1 removed",
+                  page.locator("#count").inner_text())
+
+            page.reload()
+            check("still removed after reopening the page", not page.locator("tr[data-id='9001']").is_visible())
+
+            listing.add("9003", "Hardware Intern", "Acme", "Ohio", "https://example.com/9003", 0.7,
+                        "Apply on the employer's website")
+            listing.save()
+            page.reload()
+            check("still removed after a later run rebuilds the page",
+                  not page.locator("tr[data-id='9001']").is_visible())
+            check("new internships still show", page.locator("tr[data-id='9003']").is_visible())
+
+            page.get_by_role("button", name="Show removed").click()
+            check("show removed brings it back into view", page.locator("tr[data-id='9001']").is_visible())
+            page.locator("tr[data-id='9001']").get_by_role("button", name="Restore").click()
+            page.get_by_role("button", name="Hide removed").count() and page.get_by_role("button", name="Hide removed").click()
+            page.reload()
+            check("restored internship stays visible", page.locator("tr[data-id='9001']").is_visible())
+            check("count back to all shown", page.locator("#count").inner_text() == "3 shown",
+                  page.locator("#count").inner_text())
 finally:
     server.shutdown()
 

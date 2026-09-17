@@ -215,6 +215,7 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
     for row in rows:
         percent = round(float(row.get("score", 0)) * 100)
         url = escape(str(row.get("url", "")), quote=True)
+        job_id = escape(str(row.get("job_id", "")), quote=True)
         resume_cell = ""
         resume = str(row.get("resume", ""))
         if resume and Path(resume).exists():
@@ -224,7 +225,7 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
                 link = Path(resume).resolve().as_uri()
             resume_cell = f"<a href='{escape(link, quote=True)}'>Open</a>"
         body.append(
-            "<tr>"
+            f"<tr data-id='{job_id}'>"
             f"<td class='num'>{percent}%</td>"
             f"<td><a href='{url}' target='_blank' rel='noopener'>{escape(str(row.get('title', '')))}</a></td>"
             f"<td>{escape(str(row.get('employer', '')))}</td>"
@@ -232,20 +233,22 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
             f"<td>{escape(str(row.get('reason', '')))}</td>"
             f"<td>{resume_cell}</td>"
             f"<td class='when'>{escape(str(row.get('first_seen', ''))[:10])}</td>"
+            "<td class='act'><button type='button' class='remove'>Remove</button></td>"
             "</tr>"
         )
-    table = "\n".join(body) or "<tr><td colspan='7'>Nothing here yet.</td></tr>"
+    table = "\n".join(body) or "<tr><td colspan='8'>Nothing here yet.</td></tr>"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Internships to apply to yourself</title>
 <style>
-  :root {{ color-scheme: light dark; --fg:#1b1b1f; --muted:#5f6068; --line:#e3e3e8; --bg:#fff; --accent:#1f5fd6; }}
-  @media (prefers-color-scheme: dark) {{ :root {{ --fg:#ececf1; --muted:#a4a5ad; --line:#34343b; --bg:#17171b; --accent:#8ab4ff; }} }}
+  :root {{ color-scheme: light dark; --fg:#1b1b1f; --muted:#5f6068; --line:#e3e3e8; --bg:#fff; --accent:#1f5fd6; --soft:#f3f3f6; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --fg:#ececf1; --muted:#a4a5ad; --line:#34343b; --bg:#17171b; --accent:#8ab4ff; --soft:#232329; }} }}
   body {{ margin:0; padding:24px 16px; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }}
-  main {{ max-width:1100px; margin:0 auto; }}
+  main {{ max-width:1160px; margin:0 auto; }}
   h1 {{ font-size:22px; margin:0 0 4px; }}
-  p {{ color:var(--muted); margin:0 0 18px; }}
+  p {{ color:var(--muted); margin:0 0 12px; }}
+  .bar {{ display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin:0 0 14px; color:var(--muted); font-size:14px; }}
   .wrap {{ overflow-x:auto; }}
   table {{ border-collapse:collapse; width:100%; }}
   th, td {{ text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }}
@@ -254,14 +257,67 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
   a:hover {{ text-decoration:underline; }}
   .num {{ font-variant-numeric:tabular-nums; white-space:nowrap; }}
   .when {{ color:var(--muted); white-space:nowrap; }}
+  .act {{ white-space:nowrap; }}
+  button {{ font:inherit; font-size:13px; color:var(--fg); background:var(--soft); border:1px solid var(--line); border-radius:6px; padding:4px 10px; cursor:pointer; }}
+  button:hover {{ border-color:var(--muted); }}
+  .linkish {{ background:none; border:none; padding:0; color:var(--accent); font-weight:600; }}
+  tr.removed {{ display:none; }}
+  body.show-removed tr.removed {{ display:table-row; opacity:.5; }}
 </style></head>
 <body><main>
 <h1>Internships to apply to yourself</h1>
 <p>{len(rows)} good matches the assistant could not apply to for you, best match first. Each link opens the posting on Handshake.</p>
+<div class="bar">
+  <span id="count"></span>
+  <button type="button" class="linkish" id="toggle" hidden>Show removed</button>
+</div>
 <div class="wrap"><table>
-<thead><tr><th>Match</th><th>Internship</th><th>Employer</th><th>Location</th><th>Why it's here</th><th>Tailored resume</th><th>Found</th></tr></thead>
+<thead><tr><th>Match</th><th>Internship</th><th>Employer</th><th>Location</th><th>Why it's here</th><th>Tailored resume</th><th>Found</th><th></th></tr></thead>
 <tbody>
 {table}
 </tbody></table></div>
-</main></body></html>
+</main>
+<script>
+(function () {{
+  // Removed internships are remembered in this browser, so they stay hidden
+  // when the page is reopened or rebuilt by a later run.
+  var KEY = 'hsbot-removed-internships';
+  var removed = {{}};
+  try {{ removed = JSON.parse(localStorage.getItem(KEY) || '{{}}') || {{}}; }} catch (e) {{ removed = {{}}; }}
+  function save() {{ try {{ localStorage.setItem(KEY, JSON.stringify(removed)); }} catch (e) {{}} }}
+
+  var rows = Array.prototype.slice.call(document.querySelectorAll('tbody tr[data-id]'));
+  var toggle = document.getElementById('toggle');
+  var count = document.getElementById('count');
+
+  function render() {{
+    var hidden = 0;
+    rows.forEach(function (row) {{
+      var gone = !!removed[row.getAttribute('data-id')];
+      row.classList.toggle('removed', gone);
+      row.querySelector('button.remove').textContent = gone ? 'Restore' : 'Remove';
+      if (gone) hidden++;
+    }});
+    count.textContent = (rows.length - hidden) + ' shown' + (hidden ? ', ' + hidden + ' removed' : '');
+    toggle.hidden = hidden === 0;
+    if (hidden === 0) document.body.classList.remove('show-removed');
+    toggle.textContent = document.body.classList.contains('show-removed') ? 'Hide removed' : 'Show removed';
+  }}
+
+  rows.forEach(function (row) {{
+    row.querySelector('button.remove').addEventListener('click', function () {{
+      var id = row.getAttribute('data-id');
+      if (removed[id]) {{ delete removed[id]; }} else {{ removed[id] = new Date().toISOString().slice(0, 10); }}
+      save();
+      render();
+    }});
+  }});
+  toggle.addEventListener('click', function () {{
+    document.body.classList.toggle('show-removed');
+    render();
+  }});
+  render();
+}})();
+</script>
+</body></html>
 """

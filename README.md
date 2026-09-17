@@ -191,6 +191,11 @@ fill in.
   best match first. `apply_yourself.csv` has the same list for Excel.
 - The list grows across runs without duplicates.
 - A posting drops off once the tool applies to it.
+- **Remove** hides an internship you've handled or don't want. Your browser
+  remembers it, so it stays hidden after you reopen the page or a later run
+  rebuilds it. **Show removed** brings hidden ones back into view, and
+  **Restore** puts one back on the list. Removing only affects the page in that
+  browser. The spreadsheet copy still lists everything.
 
 The launcher offers to open this page when a run finishes. Each run's own
 summary is also saved to `data/follow_up.csv`.
