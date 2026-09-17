@@ -81,8 +81,9 @@ scan_args = build_args(LaunchSettings(mode="search", scan=120, **base))
 check("a chosen review count is used", scan_args[scan_args.index("--scan") + 1] == "120")
 check("silly review counts reported",
       any("review" in p for p in validate(LaunchSettings(mode="search", scan=2, **base))))
+check("100 applications allowed", validate(LaunchSettings(mode="auto", resume=RESUME, major="x", max_applications=100)) == [])
 check("max applications still checked",
-      any("Max applications" in p for p in validate(LaunchSettings(mode="auto", resume=RESUME, major="x", max_applications=99))))
+      any("Max applications" in p for p in validate(LaunchSettings(mode="auto", resume=RESUME, major="x", max_applications=101))))
 check("tailoring works for the matches-only mode too",
       "--tailor-resume" in build_args(LaunchSettings(mode="search", tailor_resume=True, **base)))
 

@@ -29,6 +29,7 @@ from typing import Any
 
 import majors
 import matcher
+import prompts
 import ranking
 import resume_parser
 import tailor
@@ -97,19 +98,28 @@ class ResumeTailor:
         return result.path
 
 
-def make_question_asker(interactive: bool) -> Any:
-    """Ask the student an application question during the run, or skip it."""
+def make_question_asker(interactive: bool, timeout: float = 60.0) -> Any:
+    """Ask the student an application question during the run, or skip it.
+
+    With nobody at the keyboard the run would otherwise wait for ever, so an
+    unanswered question is given up on after `timeout` seconds and the posting
+    goes on the apply-yourself list instead.
+    """
     if not interactive:
         return None
 
     def ask(question: str) -> str | None:
         print(f"\n  This application asks: {question}")
-        print("  Type your answer and press Enter, or press Enter to leave it blank.")
-        try:
-            reply = input("  Your answer: ").strip()
-        except (EOFError, KeyboardInterrupt):
+        if timeout and timeout > 0:
+            print(f"  Type your answer and press Enter. With no answer in {round(timeout)} seconds,"
+                  " this one is left for you to finish yourself.")
+        else:
+            print("  Type your answer and press Enter, or press Enter to leave it blank.")
+        reply = prompts.ask("  Your answer: ", timeout)
+        if reply is None:
+            print("  No answer, so this posting goes on your apply-yourself list.")
             return None
-        return reply or None
+        return reply.strip() or None
 
     return ask
 
@@ -229,6 +239,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "within_miles": 25,
     "tailor_resume": False,
     "answer_questions": True,
+    "answer_timeout": 60,
     "use_ai_for_tailoring": True,
     "profile_path": "",
     "headless": False,
@@ -267,6 +278,7 @@ def load_config(args: argparse.Namespace) -> dict[str, Any]:
         ("min_match_score", getattr(args, "min_score", None)),
         ("max_applications_per_run", getattr(args, "max", None)),
         ("max_search_pages", getattr(args, "pages", None)),
+        ("answer_timeout", getattr(args, "answer_timeout", None)),
     ):
         if value is not None:
             config[key] = value
@@ -602,7 +614,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         answer_questions = bool(config.get("answer_questions", True))
         answers = tailorer.saved_answers() if answer_questions else []
         interactive = answer_questions and sys.stdin is not None and sys.stdin.isatty()
-        ask = make_question_asker(interactive)
+        ask = make_question_asker(interactive, float(config.get("answer_timeout", 60)))
         learned_answers: list[dict[str, Any]] = []
         if answer_questions:
             print(f"\nSaved answers available for {len(answers)} kinds of question.")
@@ -756,6 +768,13 @@ def add_shared_arguments(sub: argparse.ArgumentParser) -> None:
         help="local transcript uploaded when a posting requires one",
     )
     sub.add_argument("--major", help="skip the prompt and target this major")
+    sub.add_argument(
+        "--answer-timeout",
+        dest="answer_timeout",
+        type=float,
+        help="seconds to wait for an answer to a question no saved answer covers "
+             "(default 60, 0 waits for ever)",
+    )
     sub.add_argument(
         "--looking-for",
         dest="looking_for",

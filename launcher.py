@@ -137,8 +137,8 @@ def validate(settings: LaunchSettings) -> list[str]:
         problems.append("Postings to review must be between 10 and 1000.")
 
     if settings.mode != "search":
-        if not 1 <= int(settings.max_applications) <= 50:
-            problems.append("Max applications must be between 1 and 50.")
+        if not 1 <= int(settings.max_applications) <= 100:
+            problems.append("Max applications must be between 1 and 100.")
 
     url = settings.base_url.strip()
     if url and not url.lower().startswith(("http://", "https://")):
@@ -319,7 +319,7 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
     max_row = ttk.Frame(modes_box)
     max_row.grid(row=len(MODES), column=0, sticky="w", pady=(8, 0))
     ttk.Label(max_row, text="Most applications this run:").grid(row=0, column=0, sticky="w")
-    max_spin = ttk.Spinbox(max_row, from_=1, to=50, textvariable=max_var, width=5)
+    max_spin = ttk.Spinbox(max_row, from_=1, to=100, textvariable=max_var, width=5)
     max_spin.grid(row=0, column=1, padx=6)
 
     ttk.Label(max_row, text="Postings to review:").grid(row=1, column=0, sticky="w", pady=(6, 0))

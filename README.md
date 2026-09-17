@@ -34,7 +34,7 @@ commands are needed.
    - **Apply, asking me before each one** stops for a yes or no in the black
      window before every submission.
    - **Apply automatically** submits without asking, after a warning.
-3. Set **Most applications this run** (1 to 50, used by the applying modes) and
+3. Set **Most applications this run** (1 to 100, used by the applying modes) and
    **Postings to review** (10 to 1000, the default is 300). Reviewing more finds
    more but takes longer, at roughly 4 to 8 seconds a posting.
 4. Click **Start**. A browser opens on Handshake. Sign in there the first time.
@@ -207,6 +207,12 @@ profile so the next application uses it. In a run you can't type in, an
 unanswered question holds the application back and it goes on your
 apply-yourself list.
 
+**It doesn't wait for you for ever.** If a question sits unanswered for 60
+seconds, the tool stops waiting, leaves that posting for you, and carries on
+with the next one. Typing keeps it open, so only silence counts. Change the
+wait with `--answer-timeout 120`, or `--answer-timeout 0` to wait as long as
+it takes.
+
 **Personal and legal questions are only ever answered in your own words.**
 Sponsorship, citizenship, clearance, pay, criminal history and demographic
 questions are never guessed. The tool uses your saved answer, asks you, or
@@ -362,6 +368,7 @@ python main.py list
 | `--strictness broad` | How picky matching is: broad, balanced or strict. |
 | `--min-score 0.15` | An exact minimum score instead of a strictness level. |
 | `--pages 6` | Read more search result pages per query. |
+| `--answer-timeout 120` | Seconds to wait for an answer to a question no saved answer covers. The default is 60; 0 waits for ever. |
 | `--scan 100` | How many postings to open and score in one run. The default is 300. |
 | `--max 10` | Cap applications this run. |
 | `--dry-run` | Fill applications but never submit. |
@@ -503,6 +510,10 @@ python tests/tailor_test.py
 python tests/list_server_test.py
 ```
 
+```bash
+python tests/prompts_test.py
+```
+
 The tailoring tests use a made-up student in `tests/sample_profile.json` and a
 fake Claude program, so they never read your profile or use your Claude plan.
 
@@ -519,6 +530,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `majors.py` | Loads the majors and asks which one you want. |
 | `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
+| `prompts.py` | Asking a question at the keyboard without waiting for ever. |
 | `list_server.py` | Serves the apply-yourself list locally so Remove updates the saved list. |
 | `storage.py` | Application ledger, apply-yourself list and CSV export. |
 | `ranking.py` | Fit score that orders the apply-yourself list. |

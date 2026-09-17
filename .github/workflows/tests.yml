@@ -39,3 +39,6 @@ jobs:
 
       - name: Apply-yourself list server tests
         run: python tests/list_server_test.py
+
+      - name: Question prompt tests
+        run: python tests/prompts_test.py
