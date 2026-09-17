@@ -140,7 +140,8 @@ class ManualList:
     Lives in its own folder so it is easy to find. Each save writes a page with
     clickable links (apply_yourself.html), a spreadsheet copy
     (apply_yourself.csv), and the data behind them (list.json). A posting drops
-    off the list once the tool applies to it.
+    off the list once the tool applies to it. Postings the student removes are
+    kept in removed.json so later runs don't add them back.
 
     Rows are ordered by their fit score (see ranking.py), and only the best
     `limit` are kept.
@@ -152,13 +153,17 @@ class ManualList:
         self.json_path = self.folder / "list.json"
         self.csv_path = self.folder / "apply_yourself.csv"
         self.html_path = self.folder / "apply_yourself.html"
-        self._items: dict[str, dict[str, Any]] = {}
+        self.removed_path = self.folder / "removed.json"
+        self._items = self._read(self.json_path)
+        self._removed = self._read(self.removed_path)
+
+    @staticmethod
+    def _read(path: Path) -> dict[str, dict[str, Any]]:
         try:
-            raw = json.loads(self.json_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                self._items = raw
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            pass
+            return {}
+        return raw if isinstance(raw, dict) else {}
 
     def __len__(self) -> int:
         return len(self._items)
@@ -176,6 +181,8 @@ class ManualList:
         fit: float | None = None,
         why: list[str] | None = None,
     ) -> None:
+        if job_id in self._removed:
+            return
         now = datetime.now().isoformat(timespec="seconds")
         existing = self._items.get(job_id, {})
         self._items[job_id] = {
@@ -194,7 +201,33 @@ class ManualList:
         }
 
     def remove(self, job_id: str) -> None:
+        """Take a posting off the list, e.g. once the tool applied to it."""
         self._items.pop(job_id, None)
+
+    def dismiss(self, job_id: str) -> bool:
+        """The student removed it: take it off and keep it from coming back."""
+        item = self._items.pop(job_id, None)
+        if item is None:
+            return job_id in self._removed
+        self._removed[job_id] = dict(item, removed_on=datetime.now().isoformat(timespec="seconds"))
+        return True
+
+    def restore(self, job_id: str) -> bool:
+        item = self._removed.pop(job_id, None)
+        if item is None:
+            return job_id in self._items
+        item.pop("removed_on", None)
+        self._items[job_id] = item
+        return True
+
+    def is_removed(self, job_id: str) -> bool:
+        return job_id in self._removed
+
+    def removed_items(self) -> list[dict[str, Any]]:
+        return sorted(self._removed.values(), key=lambda r: str(r.get("removed_on", "")), reverse=True)
+
+    def get(self, job_id: str) -> dict[str, Any] | None:
+        return self._items.get(job_id) or self._removed.get(job_id)
 
     def unranked(self) -> list[dict[str, Any]]:
         """Entries saved before fit scores existed."""
@@ -215,10 +248,15 @@ class ManualList:
 
     def would_keep(self, job_id: str, fit: float) -> bool:
         """Whether an entry with this fit makes the best `limit`."""
+        if job_id in self._removed:
+            return False
         if job_id in self._items or not self.limit or len(self._items) < self.limit:
             return True
         worst = self.items()[self.limit - 1].get("fit")
         return worst is None or float(fit) > float(worst)
+
+    def page_html(self, served: bool = False) -> str:
+        return _manual_list_html(self.items(), self.folder, self.limit, self.removed_items(), served)
 
     def trim(self) -> list[dict[str, Any]]:
         """Drop everything below the best `limit` entries; returns what was dropped."""
@@ -233,6 +271,8 @@ class ManualList:
         self.trim()
         rows = self.items()
         self.json_path.write_text(json.dumps(self._items, indent=2, sort_keys=True), encoding="utf-8")
+        if self._removed or self.removed_path.exists():
+            self.removed_path.write_text(json.dumps(self._removed, indent=2, sort_keys=True), encoding="utf-8")
 
         fields = ["fit", "score_percent", "title", "employer", "location", "reason", "why", "url", "resume", "first_seen", "last_seen"]
         with self.csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -241,16 +281,41 @@ class ManualList:
             for row in rows:
                 writer.writerow(dict(row, score_percent=round(float(row.get("score", 0)) * 100), why="; ".join(row.get("why") or [])))
 
-        self.html_path.write_text(_manual_list_html(rows, self.folder, self.limit), encoding="utf-8")
+        self.html_path.write_text(self.page_html(), encoding="utf-8")
         return self.html_path
 
 
-def _manual_list_html(rows: list[dict[str, Any]], folder: Path, limit: int = 50) -> str:
+def _manual_list_html(
+    rows: list[dict[str, Any]],
+    folder: Path,
+    limit: int = 50,
+    removed: list[dict[str, Any]] | None = None,
+    served: bool = False,
+) -> str:
+    """The list page.
+
+    Opened as a file, Remove can only hide a row in that browser. Served by
+    list_server.py, Remove deletes the posting from the saved list for good.
+    """
     import os
     from html import escape
 
+    def resume_link(row: dict[str, Any]) -> str:
+        resume = str(row.get("resume", ""))
+        if not resume or not Path(resume).exists():
+            return ""
+        if served:
+            link = f"/resume/{row.get('job_id', '')}"
+        else:
+            try:
+                link = os.path.relpath(resume, folder).replace(os.sep, "/")
+            except ValueError:  # on a different drive
+                link = Path(resume).resolve().as_uri()
+        return f"<a href='{escape(link, quote=True)}'>Open</a>"
+
     body = []
-    for row in rows:
+    tagged = [(row, False) for row in rows] + [(row, True) for row in (removed or [])]
+    for row, gone in tagged:
         percent = round(float(row.get("score", 0)) * 100)
         fit = row.get("fit")
         fit_cell = f"{round(float(fit))}" if fit is not None else "&ndash;"
@@ -258,23 +323,15 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path, limit: int = 50)
         why_line = f"<div class='why'>{escape(why)}</div>" if why else ""
         url = escape(str(row.get("url", "")), quote=True)
         job_id = escape(str(row.get("job_id", "")), quote=True)
-        resume_cell = ""
-        resume = str(row.get("resume", ""))
-        if resume and Path(resume).exists():
-            try:
-                link = os.path.relpath(resume, folder).replace(os.sep, "/")
-            except ValueError:  # on a different drive
-                link = Path(resume).resolve().as_uri()
-            resume_cell = f"<a href='{escape(link, quote=True)}'>Open</a>"
         body.append(
-            f"<tr data-id='{job_id}'>"
+            f"<tr data-id='{job_id}' data-removed='{1 if gone else 0}'>"
             f"<td class='num fit'>{fit_cell}</td>"
             f"<td class='num'>{percent}%</td>"
             f"<td><a href='{url}' target='_blank' rel='noopener'>{escape(str(row.get('title', '')))}</a>{why_line}</td>"
             f"<td>{escape(str(row.get('employer', '')))}</td>"
             f"<td>{escape(str(row.get('location', '')))}</td>"
             f"<td>{escape(str(row.get('reason', '')))}</td>"
-            f"<td>{resume_cell}</td>"
+            f"<td>{resume_link(row)}</td>"
             f"<td class='when'>{escape(str(row.get('first_seen', ''))[:10])}</td>"
             "<td class='act'><button type='button' class='remove'>Remove</button></td>"
             "</tr>"
@@ -285,12 +342,13 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path, limit: int = 50)
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Internships to apply to yourself</title>
 <style>
-  :root {{ color-scheme: light dark; --fg:#1b1b1f; --muted:#5f6068; --line:#e3e3e8; --bg:#fff; --accent:#1f5fd6; --soft:#f3f3f6; }}
-  @media (prefers-color-scheme: dark) {{ :root {{ --fg:#ececf1; --muted:#a4a5ad; --line:#34343b; --bg:#17171b; --accent:#8ab4ff; --soft:#232329; }} }}
+  :root {{ color-scheme: light dark; --fg:#1b1b1f; --muted:#5f6068; --line:#e3e3e8; --bg:#fff; --accent:#1f5fd6; --soft:#f3f3f6; --warn:#fff4d6; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --fg:#ececf1; --muted:#a4a5ad; --line:#34343b; --bg:#17171b; --accent:#8ab4ff; --soft:#232329; --warn:#3a3220; }} }}
   body {{ margin:0; padding:24px 16px; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }}
   main {{ max-width:1160px; margin:0 auto; }}
   h1 {{ font-size:22px; margin:0 0 4px; }}
   p {{ color:var(--muted); margin:0 0 12px; }}
+  .note {{ background:var(--warn); color:var(--fg); border-radius:8px; padding:8px 12px; font-size:14px; }}
   .bar {{ display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin:0 0 14px; color:var(--muted); font-size:14px; }}
   .wrap {{ overflow-x:auto; }}
   table {{ border-collapse:collapse; width:100%; }}
@@ -305,6 +363,7 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path, limit: int = 50)
   .act {{ white-space:nowrap; }}
   button {{ font:inherit; font-size:13px; color:var(--fg); background:var(--soft); border:1px solid var(--line); border-radius:6px; padding:4px 10px; cursor:pointer; }}
   button:hover {{ border-color:var(--muted); }}
+  button:disabled {{ opacity:.6; cursor:default; }}
   .linkish {{ background:none; border:none; padding:0; color:var(--accent); font-weight:600; }}
   tr.removed {{ display:none; }}
   body.show-removed tr.removed {{ display:table-row; opacity:.5; }}
@@ -312,6 +371,7 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path, limit: int = 50)
 <body><main>
 <h1>Internships to apply to yourself</h1>
 <p>{len(rows)} good matches the assistant could not apply to for you, best fit first (at most {limit}). Fit is out of 100: the major match, overlap with your resume, how open it is to undergraduates, and the title. Each link opens the posting on Handshake.</p>
+<p class="note" id="note" hidden></p>
 <div class="bar">
   <span id="count"></span>
   <button type="button" class="linkish" id="toggle" hidden>Show removed</button>
@@ -324,21 +384,34 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path, limit: int = 50)
 </main>
 <script>
 (function () {{
-  // Removed internships are remembered in this browser, so they stay hidden
-  // when the page is reopened or rebuilt by a later run.
+  var SERVED = {'true' if served else 'false'};
+  // Opened as a plain file, removals can only be remembered in this browser.
   var KEY = 'hsbot-removed-internships';
-  var removed = {{}};
-  try {{ removed = JSON.parse(localStorage.getItem(KEY) || '{{}}') || {{}}; }} catch (e) {{ removed = {{}}; }}
-  function save() {{ try {{ localStorage.setItem(KEY, JSON.stringify(removed)); }} catch (e) {{}} }}
+  var local = {{}};
+  try {{ local = JSON.parse(localStorage.getItem(KEY) || '{{}}') || {{}}; }} catch (e) {{ local = {{}}; }}
+  function saveLocal() {{ try {{ localStorage.setItem(KEY, JSON.stringify(local)); }} catch (e) {{}} }}
 
   var rows = Array.prototype.slice.call(document.querySelectorAll('tbody tr[data-id]'));
   var toggle = document.getElementById('toggle');
   var count = document.getElementById('count');
+  var note = document.getElementById('note');
+
+  function say(text) {{ note.textContent = text; note.hidden = !text; }}
+  function isRemoved(row) {{
+    return row.getAttribute('data-removed') === '1' || (!SERVED && !!local[row.getAttribute('data-id')]);
+  }}
+  function post(action, id) {{
+    return fetch('/api/' + action, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json', 'X-Hsbot': '1' }},
+      body: JSON.stringify({{ id: id }})
+    }}).then(function (r) {{ if (!r.ok) throw new Error(r.status); return r.json(); }});
+  }}
 
   function render() {{
     var hidden = 0;
     rows.forEach(function (row) {{
-      var gone = !!removed[row.getAttribute('data-id')];
+      var gone = isRemoved(row);
       row.classList.toggle('removed', gone);
       row.querySelector('button.remove').textContent = gone ? 'Restore' : 'Remove';
       if (gone) hidden++;
@@ -350,17 +423,40 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path, limit: int = 50)
   }}
 
   rows.forEach(function (row) {{
-    row.querySelector('button.remove').addEventListener('click', function () {{
+    var button = row.querySelector('button.remove');
+    button.addEventListener('click', function () {{
       var id = row.getAttribute('data-id');
-      if (removed[id]) {{ delete removed[id]; }} else {{ removed[id] = new Date().toISOString().slice(0, 10); }}
-      save();
-      render();
+      if (!SERVED) {{
+        if (row.getAttribute('data-removed') === '1') {{
+          say('To restore this one, open the list with "Open apply-yourself list.bat".');
+          return;
+        }}
+        if (local[id]) {{ delete local[id]; }} else {{ local[id] = new Date().toISOString().slice(0, 10); }}
+        saveLocal();
+        render();
+        return;
+      }}
+      var restoring = row.getAttribute('data-removed') === '1';
+      button.disabled = true;
+      post(restoring ? 'restore' : 'remove', id).then(function () {{
+        row.setAttribute('data-removed', restoring ? '0' : '1');
+        say('');
+        render();
+      }}).catch(function () {{
+        say('The list closed after sitting idle. Open it again to remove or restore postings.');
+      }}).then(function () {{ button.disabled = false; }});
     }});
   }});
   toggle.addEventListener('click', function () {{
     document.body.classList.toggle('show-removed');
     render();
   }});
+
+  if (SERVED) {{
+    setInterval(function () {{ fetch('/api/ping', {{ method: 'POST', headers: {{ 'X-Hsbot': '1' }} }}).catch(function () {{}}); }}, 20000);
+  }} else {{
+    say('Remove here only hides a posting in this browser. To remove postings for good, open the list with "Open apply-yourself list.bat".');
+  }}
   render();
 }})();
 </script>

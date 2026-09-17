@@ -705,6 +705,12 @@ def followup_row(job: Job, result: matcher.MatchResult, reason: str) -> dict[str
     }
 
 
+def cmd_list(args: argparse.Namespace) -> int:
+    import list_server
+
+    return list_server.serve(manual_list().folder, open_page=None if args.no_browser else list_server.webbrowser.open)
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     ledger = Ledger(DATA_DIR / "applied.json")
     out = ledger.export_csv(DATA_DIR / args.out)
@@ -841,6 +847,12 @@ def build_parser() -> argparse.ArgumentParser:
     history = subparsers.add_parser("history", help="export the application ledger")
     history.add_argument("--out", default="history.csv", help="CSV filename in data/")
     history.set_defaults(func=cmd_history)
+
+    list_cmd = subparsers.add_parser(
+        "list", help="open the apply-yourself list, where Remove takes postings off for good"
+    )
+    list_cmd.add_argument("--no-browser", action="store_true", help="print the address instead of opening it")
+    list_cmd.set_defaults(func=cmd_list)
 
     majors_cmd = subparsers.add_parser("majors", help="list majors with tuned searches")
     majors_cmd.set_defaults(func=cmd_majors)

@@ -222,17 +222,22 @@ apply to yourself**, next to this README. That covers postings that apply on the
 employer's own website, and forms with questions or documents the tool won't
 fill in.
 
-- Double-click `apply_yourself.html` for a page with a link to each posting,
-  best fit first. `apply_yourself.csv` has the same list for Excel.
+- Double-click **Open apply-yourself list.bat** (or run `python main.py list`)
+  for a page with a link to each posting, best fit first. The launcher opens
+  it the same way when a run finishes. `apply_yourself.csv` has the same list
+  for Excel.
 - The list keeps at most **50** postings. When a better one turns up, the
   weakest drops off (and gets no tailored resume).
 - The list grows across runs without duplicates.
 - A posting drops off once the tool applies to it.
-- **Remove** hides an internship you've handled or don't want. Your browser
-  remembers it, so it stays hidden after you reopen the page or a later run
-  rebuilds it. **Show removed** brings hidden ones back into view, and
-  **Restore** puts one back on the list. Removing only affects the page in that
-  browser. The spreadsheet copy still lists everything.
+- **Remove** takes a posting off for good: off the page, `list.json` and the
+  spreadsheet. It goes into `removed.json`, so later runs don't add it back and
+  it doesn't count toward the 50. **Show removed** brings removed ones back into
+  view, and **Restore** puts one back on the list.
+- The page is served from your own computer (127.0.0.1, nothing leaves it) so
+  that Remove can change the saved files. It stops by itself a few minutes
+  after you close the tab. If you open `apply_yourself.html` straight from the
+  folder instead, Remove can only hide rows in that browser.
 
 **How the list is ordered.** Lots of postings score 100% on the major preset,
 so this list uses a finer **Fit** score out of 100. It only orders this list;
@@ -332,6 +337,12 @@ python main.py history
 
 `history` writes `data/history.csv` with every posting the tool has applied to,
 skipped or declined.
+
+```bash
+python main.py list
+```
+
+`list` opens the apply-yourself list with a working Remove button.
 
 ## Useful flags
 
@@ -482,6 +493,10 @@ python tests/launcher_test.py
 python tests/tailor_test.py
 ```
 
+```bash
+python tests/list_server_test.py
+```
+
 The tailoring tests use a made-up student in `tests/sample_profile.json` and a
 fake Claude program, so they never read your profile or use your Claude plan.
 
@@ -490,6 +505,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | File | Role |
 | --- | --- |
 | `Start Internship Assistant.bat` | The double-click starting point. |
+| `Open apply-yourself list.bat` | Opens the apply-yourself list with a working Remove button. |
 | `launcher.py` | The window behind the double-click, plus first-time setup. |
 | `main.py` | Command line interface and the run loop. |
 | `handshake.py` | Playwright driver: login, search, job pages, submission. |
@@ -497,6 +513,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `majors.py` | Loads the majors and asks which one you want. |
 | `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
+| `list_server.py` | Serves the apply-yourself list locally so Remove updates the saved list. |
 | `storage.py` | Application ledger, apply-yourself list and CSV export. |
 | `ranking.py` | Fit score that orders the apply-yourself list. |
 | `tailor.py` | Resume tailoring, fact checks and the one-page PDF. |

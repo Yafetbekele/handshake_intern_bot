@@ -36,3 +36,6 @@ jobs:
 
       - name: Resume tailoring tests
         run: python tests/tailor_test.py
+
+      - name: Apply-yourself list server tests
+        run: python tests/list_server_test.py

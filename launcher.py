@@ -501,6 +501,15 @@ def _open(path: Path) -> None:
         print(f"Open this file: {path}")
 
 
+def open_list(page: Path) -> None:
+    """Open the list through list_server.py so Remove works for good."""
+    flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+    try:
+        subprocess.Popen([sys.executable, str(HERE / "main.py"), "list"], cwd=str(HERE), creationflags=flags)
+    except OSError:
+        _open(page)
+
+
 def offer_results(mode: str, started_at: float) -> None:
     page = manual_list_page()
     if page.exists() and page.stat().st_mtime >= started_at:
@@ -511,7 +520,7 @@ def offer_results(mode: str, started_at: float) -> None:
             "These are good matches the assistant couldn't apply to for you. "
             "The list opens in your web browser with a link to each posting.",
         ):
-            _open(page)
+            open_list(page)
         return
 
     path = result_file(mode)
