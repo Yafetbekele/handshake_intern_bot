@@ -147,7 +147,7 @@ class ManualList:
     `limit` are kept.
     """
 
-    def __init__(self, folder: str | Path, limit: int = 50) -> None:
+    def __init__(self, folder: str | Path, limit: int = 100) -> None:
         self.folder = Path(folder)
         self.limit = limit
         self.json_path = self.folder / "list.json"
@@ -288,7 +288,7 @@ class ManualList:
 def _manual_list_html(
     rows: list[dict[str, Any]],
     folder: Path,
-    limit: int = 50,
+    limit: int = 100,
     removed: list[dict[str, Any]] | None = None,
     served: bool = False,
 ) -> str:

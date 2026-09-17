@@ -76,6 +76,13 @@ anywhere = build_args(LaunchSettings(mode="search", looking_for="jobs", **base))
 check("blank city means anywhere, without asking again", anywhere[anywhere.index("--near") + 1] == "")
 check("distance out of range reported",
       any("miles" in p for p in validate(LaunchSettings(mode="search", near="Baltimore", within_miles=0, **base))))
+check("postings to review passed through", args[args.index("--scan") + 1] == "300")
+scan_args = build_args(LaunchSettings(mode="search", scan=120, **base))
+check("a chosen review count is used", scan_args[scan_args.index("--scan") + 1] == "120")
+check("silly review counts reported",
+      any("review" in p for p in validate(LaunchSettings(mode="search", scan=2, **base))))
+check("max applications still checked",
+      any("Max applications" in p for p in validate(LaunchSettings(mode="auto", resume=RESUME, major="x", max_applications=99))))
 check("tailoring works for the matches-only mode too",
       "--tailor-resume" in build_args(LaunchSettings(mode="search", tailor_resume=True, **base)))
 

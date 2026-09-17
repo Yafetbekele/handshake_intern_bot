@@ -34,8 +34,11 @@ commands are needed.
    - **Apply, asking me before each one** stops for a yes or no in the black
      window before every submission.
    - **Apply automatically** submits without asking, after a warning.
-3. Click **Start**. A browser opens on Handshake. Sign in there the first time.
-4. When it finishes, it offers to open your results in Excel.
+3. Set **Most applications this run** (1 to 50, used by the applying modes) and
+   **Postings to review** (10 to 1000, the default is 300). Reviewing more finds
+   more but takes longer, at roughly 4 to 8 seconds a posting.
+4. Click **Start**. A browser opens on Handshake. Sign in there the first time.
+5. When it finishes, it offers to open your results in Excel.
 
 The window remembers your choices for next time. The black window that stays
 open is where progress shows up and where you answer yes or no in the "asking
@@ -226,13 +229,16 @@ fill in.
   for a page with a link to each posting, best fit first. The launcher opens
   it the same way when a run finishes. `apply_yourself.csv` has the same list
   for Excel.
-- The list keeps at most **50** postings. When a better one turns up, the
-  weakest drops off (and gets no tailored resume).
+- Each run adds at most the **10** best postings it couldn't apply to, so one
+  busy run can't bury the list. The rest are left off and get no tailored
+  resume; a later run can still pick them up.
+- The list keeps at most **100** postings. When a better one turns up, the
+  weakest drops off.
 - The list grows across runs without duplicates.
 - A posting drops off once the tool applies to it.
 - **Remove** takes a posting off for good: off the page, `list.json` and the
   spreadsheet. It goes into `removed.json`, so later runs don't add it back and
-  it doesn't count toward the 50. **Show removed** brings removed ones back into
+  it doesn't count toward the 100. **Show removed** brings removed ones back into
   view, and **Restore** puts one back on the list.
 - The page is served from your own computer (127.0.0.1, nothing leaves it) so
   that Remove can change the saved files. It stops by itself a few minutes

@@ -50,8 +50,40 @@ with tempfile.TemporaryDirectory() as _tmp:
     page = ranked.save()
     assert [r["job_id"] for r in ManualList(Path(_tmp) / "ranked").items()] == ["b", "c", "a"], "only the best 3 kept"
     assert "matches your resume: fpga" in page.read_text(encoding="utf-8")
-    assert ManualList(Path(_tmp) / "x").limit == 50
+    assert ManualList(Path(_tmp) / "y").limit == 100, "the list holds 100"
     print("  ordered by fit and capped")
+    print("  OK")
+
+print("=" * 70)
+print("0c. ONLY THE BEST FEW JOIN THE LIST EACH RUN")
+print("=" * 70)
+import main as _cli
+import ranking as _ranking
+from handshake import Job as _Job
+
+with tempfile.TemporaryDirectory() as _tmp2:
+    listing = ManualList(Path(_tmp2) / "list")
+    ranker = _cli.ListRanker(None, majors.resolve("Computer Engineering"), Path(_tmp2) / "no_profile.json")
+    tailorer = _cli.ResumeTailor({"tailor_resume": False})
+    entries = [
+        (
+            _Job(job_id=str(n), url=f"https://example.test/{n}", title=f"FPGA Engineering Intern {n}",
+                 employer="Chips", location="Remote",
+                 description="Undergraduates welcome. " + ("Verilog, FPGA and C++." if n < 12 else "")),
+            matcher.MatchResult(score=1.0 if n < 12 else 0.3),
+            "Apply on the employer's website",
+        )
+        for n in range(20)
+    ]
+    _cli.add_best_to_manual(listing, tailorer, ranker, entries)
+    assert len(listing) == _ranking.MAX_NEW_PER_RUN == 10, len(listing)
+    kept_ids = [row["job_id"] for row in listing.items()]
+    assert all(int(job_id) < 12 for job_id in kept_ids), kept_ids
+    listing.dismiss(kept_ids[0])
+    _cli.add_best_to_manual(listing, tailorer, ranker, entries)
+    assert not listing.is_removed(kept_ids[0]) or kept_ids[0] not in [r["job_id"] for r in listing.items()]
+    assert listing.is_removed(kept_ids[0]), "a removed posting is never added back"
+    print(f"  10 of 20 added, weakest left off, removed ones stay off")
     print("  OK")
 
 print("=" * 70)

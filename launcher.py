@@ -44,6 +44,7 @@ class LaunchSettings:
     major: str = ""
     mode: str = "search"
     max_applications: int = 10
+    scan: int = 300
     cover_letter: str = ""
     transcript: str = ""
     locations: str = ""
@@ -71,6 +72,10 @@ def load_settings(path: Path = SETTINGS_PATH) -> LaunchSettings:
         settings.mode = "search"
     if settings.strictness not in STRICTNESS_KEYS:
         settings.strictness = "balanced"
+    try:
+        settings.scan = int(settings.scan)
+    except (TypeError, ValueError):
+        settings.scan = 300
     try:
         settings.max_applications = int(settings.max_applications)
     except (TypeError, ValueError):
@@ -124,6 +129,13 @@ def validate(settings: LaunchSettings) -> list[str]:
         if value.strip() and not Path(value).expanduser().is_file():
             problems.append(f"The {label} file can't be found:\n{value}")
 
+    try:
+        scan_ok = 10 <= int(settings.scan) <= 1000
+    except (TypeError, ValueError):
+        scan_ok = False
+    if not scan_ok:
+        problems.append("Postings to review must be between 10 and 1000.")
+
     if settings.mode != "search":
         if not 1 <= int(settings.max_applications) <= 50:
             problems.append("Max applications must be between 1 and 50.")
@@ -156,6 +168,7 @@ def build_args(settings: LaunchSettings) -> list[str]:
         if location.strip():
             args += ["--location", location.strip()]
 
+    args += ["--scan", str(int(settings.scan))]
     if settings.tailor_resume:
         args.append("--tailor-resume")
     if settings.strictness in STRICTNESS_KEYS:
@@ -262,6 +275,7 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
     major_var = tk.StringVar(value=initial.major)
     mode_var = tk.StringVar(value=initial.mode)
     max_var = tk.StringVar(value=str(initial.max_applications))
+    scan_var = tk.StringVar(value=str(initial.scan))
     cover_var = tk.StringVar(value=initial.cover_letter)
     transcript_var = tk.StringVar(value=initial.transcript)
     locations_var = tk.StringVar(value=initial.locations)
@@ -307,6 +321,9 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
     ttk.Label(max_row, text="Most applications this run:").grid(row=0, column=0, sticky="w")
     max_spin = ttk.Spinbox(max_row, from_=1, to=50, textvariable=max_var, width=5)
     max_spin.grid(row=0, column=1, padx=6)
+
+    ttk.Label(max_row, text="Postings to review:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+    ttk.Spinbox(max_row, from_=10, to=1000, increment=25, textvariable=scan_var, width=5).grid(row=1, column=1, padx=6, pady=(6, 0))
 
     def sync_max_state(*_: object) -> None:
         max_spin.configure(state="disabled" if mode_var.get() == "search" else "normal")
@@ -386,6 +403,7 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
             major=major_var.get().strip(),
             mode=mode_var.get(),
             max_applications=max_apps,
+            scan=safe_int(scan_var.get(), 300),
             cover_letter=cover_var.get().strip(),
             transcript=transcript_var.get().strip(),
             locations=locations_var.get().strip(),

@@ -28,7 +28,8 @@ LEVEL_POINTS = 25.0
 TITLE_POINTS = 10.0
 RESUME_HITS_FOR_FULL = 8.0
 
-LIST_LIMIT = 50
+LIST_LIMIT = 100
+MAX_NEW_PER_RUN = 10  # only the best few of a run's leftovers join the list
 
 # Words from profile tags that say nothing about a posting when they appear.
 GENERIC_TERMS = {
