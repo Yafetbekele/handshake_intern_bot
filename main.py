@@ -94,6 +94,49 @@ class ResumeTailor:
         return result.path
 
 
+def make_question_asker(interactive: bool) -> Any:
+    """Ask the student an application question during the run, or skip it."""
+    if not interactive:
+        return None
+
+    def ask(question: str) -> str | None:
+        print(f"\n  This application asks: {question}")
+        print("  Type your answer and press Enter, or press Enter to leave it blank.")
+        try:
+            reply = input("  Your answer: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return reply or None
+
+    return ask
+
+
+def save_learned_answers(profile_path: Path, learned: list[dict[str, Any]]) -> int:
+    """Add answers the student typed during the run to their profile."""
+    if not learned or not profile_path.exists():
+        return 0
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    existing = profile.setdefault("application_answers", [])
+    known = {str(p).lower() for a in existing for p in a.get("match", [])}
+    added = 0
+    for answer in learned:
+        phrases = [str(p).lower() for p in answer.get("match", [])]
+        if any(p in known for p in phrases):
+            continue
+        existing.append(answer)
+        known.update(phrases)
+        added += 1
+    if added:
+        try:
+            profile_path.write_text(json.dumps(profile, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except OSError:
+            return 0
+    return added
+
+
 def add_to_manual_list(
     manual: ManualList, tailorer: ResumeTailor, job: Job, result: matcher.MatchResult, reason: str
 ) -> None:
@@ -450,11 +493,18 @@ def cmd_apply(args: argparse.Namespace) -> int:
             transcript_name=str(config.get("transcript_doc_name", "")),
         )
 
-        answers = tailorer.saved_answers() if config.get("answer_questions", True) else []
-        if answers:
+        answer_questions = bool(config.get("answer_questions", True))
+        answers = tailorer.saved_answers() if answer_questions else []
+        interactive = answer_questions and sys.stdin is not None and sys.stdin.isatty()
+        ask = make_question_asker(interactive)
+        learned_answers: list[dict[str, Any]] = []
+        if answer_questions:
             print(f"\nSaved answers available for {len(answers)} kinds of question.")
-            print("Questions about sponsorship, citizenship, clearance, pay, criminal history")
-            print("or demographics are always left for you.")
+            if interactive:
+                print("Anything else it asks, it will ask you here, and remember your answer.")
+            else:
+                print("Unanswered questions will hold an application back for you to finish.")
+            print("Social security numbers and financial details are never filled in.")
 
         cap = int(config.get("max_applications_per_run", 15))
         delay_low, delay_high = (
@@ -497,7 +547,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
             if tailored is not None:
                 job_documents = replace(documents, resume_path=str(tailored), tailored_resume=True)
 
-            status, note = session.apply(job, job_documents, dry_run=dry_run, answers=answers)
+            status, note = session.apply(
+                job, job_documents, dry_run=dry_run, answers=answers, ask=ask
+            )
+            if session.last_learned_answers:
+                learned_answers += session.last_learned_answers
+                answers = answers + session.last_learned_answers
             counts[status] = counts.get(status, 0) + 1
             ledger.record(
                 job.job_id, status, job.title, job.employer,
@@ -526,6 +581,10 @@ def cmd_apply(args: argparse.Namespace) -> int:
             if tailorer.enabled:
                 print(f"\n{job.label()}")
             add_to_manual_list(manual, tailorer, job, result, reason)
+
+    saved = save_learned_answers(tailorer.profile_path, learned_answers)
+    if saved:
+        print(f"\nSaved {saved} of your answers for next time in {tailorer.profile_path}")
 
     banner("Run summary")
     for status, count in sorted(counts.items(), key=lambda kv: -kv[1]):

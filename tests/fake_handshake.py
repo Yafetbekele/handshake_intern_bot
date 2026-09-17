@@ -177,6 +177,7 @@ JOBS: dict[str, dict[str, str]] = {
         "questions": [
             {"type": "text", "label": "Phone number", "required": True},
             {"type": "text", "label": "Will you now or in the future require visa sponsorship?", "required": True},
+            {"type": "text", "label": "Social Security Number", "required": True},
         ],
     },
 }

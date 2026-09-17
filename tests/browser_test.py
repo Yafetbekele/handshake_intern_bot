@@ -343,11 +343,50 @@ try:
             print("19. SENSITIVE QUESTIONS ARE LEFT FOR THE STUDENT")
             print("=" * 70)
             sensitive = session.load_job("1009")
-            status, note = session.apply(sensitive, docs, dry_run=False, answers=saved_answers)
-            print(f"  status={status}  note={note}")
+            status, note = session.apply(sensitive, docs, dry_run=False, answers=saved_answers[:1])
+            print(f"  no answer saved: status={status}  note={note}")
             check("held back for the student", status == "needs_manual", status)
             check("names the sponsorship question", "sponsorship" in note.lower(), note)
             check("nothing submitted", "Application submitted" not in session.page.inner_text("body"))
+
+            print()
+            print("=" * 70)
+            print("20. THE STUDENT'S OWN ANSWER TO A PERSONAL QUESTION IS USED")
+            print("=" * 70)
+            with_sponsorship = saved_answers + [{"match": ["sponsorship"], "value": "No"},
+                                                {"match": ["social security"], "value": "123-45-6789"}]
+            sensitive = session.load_job("1009")
+            status, note = session.apply(sensitive, docs, dry_run=False, answers=with_sponsorship)
+            print(f"  status={status}  note={note}")
+            check("sponsorship answered from the student's words", "sponsorship" in note.lower() and "No" in note, note)
+            check("social security number never filled in", "never fills this in" in note, note)
+            check("still held back because of it", status == "needs_manual", status)
+            typed = session.page.get_attribute("#done", "data-answers") or ""
+            check("nothing was submitted", "Application submitted" not in session.page.inner_text("body"), typed)
+
+            print()
+            print("=" * 70)
+            print("21. ASKING THE STUDENT DURING THE RUN")
+            print("=" * 70)
+            asked: list[str] = []
+
+            def ask_stub(question: str) -> str | None:
+                asked.append(question)
+                if "sponsorship" in question.lower():
+                    return "No"
+                return None
+
+            sensitive = session.load_job("1009")
+            status, note = session.apply(sensitive, docs, dry_run=False, answers=saved_answers[:1], ask=ask_stub)
+            print(f"  asked: {asked}")
+            print(f"  status={status}  note={note}")
+            check("the student was asked about sponsorship", any("sponsorship" in q.lower() for q in asked))
+            check("the student was never asked for a social security number",
+                  not any("social security" in q.lower() for q in asked))
+            check("their answer was used", "No" in note, note)
+            check("the answer was kept for next time",
+                  any("sponsorship" in " ".join(a["match"]).lower() for a in session.last_learned_answers),
+                  str(session.last_learned_answers))
 finally:
     server.shutdown()
 

@@ -161,13 +161,23 @@ the tool fills them in:
 ```
 
 A field is only filled when its label clearly matches one of your answers.
-Anything else is left empty, which holds the application back for you.
 
-**Some questions are never answered for you.** Sponsorship, citizenship,
-security clearance, pay, criminal history, and any demographic question are
-always left alone, and the posting goes on your apply-yourself list. Those
-answers are personal or legal judgements, and a wrong one can cost you an
-offer. Set `answer_questions` to false to switch the whole feature off.
+**Questions it doesn't recognize, it asks you.** When a run is in a window you
+can type in, the black window stops and asks, then saves your answer to your
+profile so the next application uses it. In a run you can't type in, an
+unanswered question holds the application back and it goes on your
+apply-yourself list.
+
+**Personal and legal questions are only ever answered in your own words.**
+Sponsorship, citizenship, clearance, pay, criminal history and demographic
+questions are never guessed. The tool uses your saved answer, asks you, or
+leaves the question blank.
+
+**Two things are never filled in at all:** Social Security numbers and
+financial details such as bank or card numbers. If a form insists on one, it
+is left for you to finish on Handshake.
+
+Set `answer_questions` to false to switch the whole feature off.
 
 ### Internships to apply to yourself
 

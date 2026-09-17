@@ -19,7 +19,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qsl, quote_plus, urlparse
 
 PLAYWRIGHT_HINT = (
@@ -155,13 +155,19 @@ EXTERNAL_TEXT = re.compile(
     r"apply\s+externally|apply\s+on\s+(company|employer)|external\s+application",
     re.IGNORECASE,
 )
-# Questions the assistant must never answer for the student. These are personal
-# or legal judgements, and a wrong answer can cost an offer.
+# Personal or legal questions. The assistant answers these only with words the
+# student gave it, never with a guess of its own.
 SENSITIVE_QUESTION = re.compile(
     r"sponsor|visa|citizen|green card|work permit|clearance|secret|salary|compensation|"
     r"wage|felon|criminal|conviction|background check|drug test|gender|race|ethnic|"
-    r"hispanic|latino|veteran|disab|age\b|date of birth|birth date|marital|pregnan|religion|"
-    r"social security|ssn",
+    r"hispanic|latino|veteran|disab|age\b|date of birth|birth date|marital|pregnan|religion",
+    re.IGNORECASE,
+)
+
+# Never filled in, whatever is saved. These belong in no form the assistant drives.
+NEVER_FILL = re.compile(
+    r"social security|\bssn\b|passport|driver'?s? licen|bank|routing|account number|"
+    r"credit card|card number|cvv|password|pin\b",
     re.IGNORECASE,
 )
 
@@ -382,6 +388,8 @@ class HandshakeSession:
         self._context = None
         self.page: Page | None = None
         self._learned_template = ""
+        # Answers the student typed during the last application, to save for next time.
+        self.last_learned_answers: list[dict[str, Any]] = []
 
     @staticmethod
     def _resolve_profile_dir(preferred: Path) -> Path:
@@ -967,6 +975,7 @@ class HandshakeSession:
         documents: Documents,
         dry_run: bool = False,
         answers: list[dict[str, Any]] | None = None,
+        ask: Callable[[str], str | None] | None = None,
     ) -> tuple[str, str]:
         """Attempt one application. Returns (status, note).
 
@@ -1032,7 +1041,8 @@ class HandshakeSession:
 
         attached, attach_note, missing_documents = self._attach_documents(documents, dry_run)
 
-        answered, refused = self._fill_saved_answers(dialog, answers or [])
+        answered, refused, learned = self._fill_saved_answers(dialog, answers or [], ask)
+        self.last_learned_answers = learned
         if answered:
             attach_note += "; answered " + "; ".join(answered[:4])
 
@@ -1046,7 +1056,10 @@ class HandshakeSession:
         ]
         if missing:
             self._dismiss_dialog()
-            return "needs_manual", "unanswered required: " + "; ".join(missing[:5])
+            note = "unanswered required: " + "; ".join(missing[:5])
+            if answered:
+                note += " | answered: " + "; ".join(answered[:4])
+            return "needs_manual", note
 
         if dry_run:
             self._dismiss_dialog()
@@ -1421,24 +1434,31 @@ class HandshakeSession:
         return None
 
     def _fill_saved_answers(
-        self, dialog: Locator, answers: list[dict[str, Any]]
-    ) -> tuple[list[str], list[str]]:
-        """Answer simple questions from the student's saved answers.
+        self,
+        dialog: Locator,
+        answers: list[dict[str, Any]],
+        ask: Callable[[str], str | None] | None = None,
+    ) -> tuple[list[str], list[str], list[dict[str, Any]]]:
+        """Answer questions from the student's saved answers.
 
-        Returns (what was filled, sensitive questions deliberately left alone).
-        A field is only filled when its label clearly matches a saved answer.
+        Personal questions (sponsorship, demographics, pay and so on) are
+        answered only from the student's own saved words, or from `ask`, which
+        puts the question to them during the run. Nothing is ever guessed.
+
+        Returns (what was filled, questions left unanswered, newly learned answers).
         """
         assert self.page is not None
         filled: list[str] = []
         refused: list[str] = []
-        if not answers:
-            return filled, refused
+        learned: list[dict[str, Any]] = []
+        if not answers and ask is None:
+            return filled, refused, learned
 
         try:
             controls = dialog.locator("input, textarea, select")
             count = min(controls.count(), 40)
         except Exception:
-            return filled, refused
+            return filled, refused, learned
 
         handled_groups: set[str] = set()
         for index in range(count):
@@ -1462,12 +1482,28 @@ class HandshakeSession:
             label = question or own_label
             if not label or DOCUMENT_FIELD.search(label):
                 continue
-            if SENSITIVE_QUESTION.search(label):
-                refused.append(label)
+            if NEVER_FILL.search(label):
+                refused.append(f"{label} (the assistant never fills this in)")
                 continue
 
             answer = self._saved_answer(label, answers)
+            if answer is None and ask is not None and kind != "radio":
+                given = ask(label)
+                if given:
+                    answer = {"match": [label.strip("* ").lower()[:60]], "value": given}
+                    learned.append(dict(answer, sensitive=bool(SENSITIVE_QUESTION.search(label))))
+            if answer is None and kind == "radio":
+                # Ask once per group, then match the option to the answer.
+                name = control.get_attribute("name") or label
+                if ask is not None and name not in handled_groups:
+                    given = ask(f"{label} (options include '{own_label}')")
+                    if given:
+                        answer = {"match": [label.strip("* ").lower()[:60]], "value": given}
+                        learned.append(dict(answer, sensitive=bool(SENSITIVE_QUESTION.search(label))))
+                        answers = answers + [answer]
             if answer is None:
+                if SENSITIVE_QUESTION.search(label):
+                    refused.append(label)
                 continue
 
             try:
@@ -1481,7 +1517,13 @@ class HandshakeSession:
                     handled_groups.add(name)
                     label = f"{label} -> {own_label}"
                 elif kind == "select":
-                    control.select_option(label=str(answer["value"]))
+                    wanted = str(answer["value"]).strip().lower()
+                    options = [" ".join(o.split()) for o in control.locator("option").all_inner_texts()]
+                    match = next((o for o in options if o.strip().lower() == wanted), None)
+                    match = match or next((o for o in options if wanted and wanted in o.lower()), None)
+                    if match is None:
+                        continue
+                    control.select_option(label=match)
                 else:
                     if (control.input_value() or "").strip():
                         continue
@@ -1490,7 +1532,7 @@ class HandshakeSession:
                 continue
             filled.append(f"{label}: {answer['value']}")
 
-        return filled, refused
+        return filled, refused, learned
 
     def _missing_required_fields(self, attached: set[str]) -> list[str]:
         """Labels of required fields still empty, ignoring satisfied document slots."""
