@@ -205,11 +205,15 @@ always one page.
 ### Signing Claude Code in, once
 
 Claude Code comes with the Claude desktop app, but it needs its own sign-in.
-When you tick tailoring, the launcher offers to open it for you. By hand:
+When you tick tailoring, the launcher offers to open it for you. By hand, in
+PowerShell:
 
 ```bash
-& (Get-ChildItem "$env:APPDATA\Claude\claude-code\*\claude.exe" | Select-Object -Last 1).FullName auth login
+& (Get-ChildItem "$env:APPDATA\Claude\claude-code\*\claude.exe", "$env:LOCALAPPDATA\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\*\claude.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1).FullName auth login
 ```
+
+The second location is where the Microsoft Store version of the Claude app
+keeps Claude Code. The tool checks both.
 
 ### What happens in an application
 
