@@ -164,6 +164,69 @@ fill in.
 The launcher offers to open this page when a run finishes. Each run's own
 summary is also saved to `data/follow_up.csv`.
 
+## Tailored resumes
+
+Tick **Tailor my resume to each job** in the launcher, or add `--tailor-resume`
+on the command line. The tool then makes a one-page resume for each job it
+applies to, and for each posting on your apply-yourself list.
+
+### Where the facts come from
+
+Everything comes from `profile/career_profile.json`, your own record of true
+facts. That file stays on your computer and is never uploaded to GitHub.
+
+- **Facts** are the plain truth about each job, project and school.
+- **Bullets** are ready-made resume wordings of those facts, tagged by topic.
+- **never_claim** lists things that are false for an entry, such as published
+  findings for research that has none yet.
+- **always_include** entries appear on every resume. **trim_first** entries are
+  cut first when a page overflows.
+
+Keep it up to date. Add a new job, project or result there and every future
+resume can use it.
+
+### How a resume is tailored
+
+- **With Claude, when available.** It uses Claude Code on your existing Claude
+  plan, with no API key and no extra cost. Claude picks, orders and rewords
+  your facts for the job.
+- **Then every AI-written bullet is checked.** A bullet is thrown out if it
+  adds a number or a technical term your profile doesn't contain, makes a
+  claim on a false-claims list, or uses mostly words your facts don't support.
+  A true pre-written bullet replaces it.
+- **With rules otherwise.** If Claude isn't signed in or doesn't answer, the
+  tool ranks your pre-written bullets, coursework and skills by how well they
+  match the posting. That is free, instant and always honest.
+
+The result keeps your original resume's format: Times, bold section headings,
+the organization in bold with the role in italics, and dash bullets. It is
+always one page.
+
+### Signing Claude Code in, once
+
+Claude Code comes with the Claude desktop app, but it needs its own sign-in.
+When you tick tailoring, the launcher offers to open it for you. By hand:
+
+```bash
+& (Get-ChildItem "$env:APPDATA\Claude\claude-code\*\claude.exe" | Select-Object -Last 1).FullName auth login
+```
+
+### What happens in an application
+
+- **Real runs** swap your default resume for the tailored one inside that
+  application only. Your default resume on Handshake is not changed.
+- **Practice runs** make the tailored PDF so you can look at it, but never
+  upload it.
+- **If the upload doesn't finish,** the application is held back rather than
+  sent without a resume, and the posting goes on your apply-yourself list.
+
+Each resume is saved in `tailored_resumes/<job number>-<employer>/` with the
+posting it was made for and `plan.json`, which records what was chosen and
+anything the fact checks rejected. A job keeps its first resume on later runs.
+Delete its folder to make a new one.
+
+Add `--no-ai` to tailor with rules only.
+
 ## Other commands
 
 ```bash
@@ -192,6 +255,8 @@ skipped or declined.
 | `--max 10` | Cap applications this run. |
 | `--dry-run` | Fill applications but never submit. |
 | `--auto-submit` | Submit without asking each time. |
+| `--tailor-resume` | Make a resume for each job from your profile. |
+| `--no-ai` | Tailor with rules only, without Claude. |
 | `--headless` | Hide the browser window. |
 
 ## How matching works
@@ -296,6 +361,13 @@ python tests/cli_test.py
 python tests/launcher_test.py
 ```
 
+```bash
+python tests/tailor_test.py
+```
+
+The tailoring tests use a made-up student in `tests/sample_profile.json` and a
+fake Claude program, so they never read your profile or use your Claude plan.
+
 ## Files
 
 | File | Role |
@@ -308,6 +380,8 @@ python tests/launcher_test.py
 | `majors.py` | Major to search terms and keywords, with the prompt. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
 | `storage.py` | Application ledger, apply-yourself list and CSV export. |
+| `tailor.py` | Resume tailoring, fact checks and the one-page PDF. |
+| `profile/career_profile.json` | Your facts for tailoring. Local only. |
 | `selectors.json` | CSS fallbacks, the part to edit when Handshake changes. |
 | `config.example.json` | Template for `config.json`. |
 
@@ -319,7 +393,10 @@ python tests/launcher_test.py
   in. Those forms go on your apply-yourself list too.
 - Required fields are detected from the form's own markings. A question that is
   required but not marked that way can't be seen, so watch the first few runs.
-- Nothing here writes a cover letter or edits your resume per posting.
+- Nothing here writes cover letters.
+- The fact checks catch invented numbers, tools, and listed false claims. They
+  can't catch every possible stretch of the truth, so skim `plan.json` or the
+  PDF for the first few jobs.
 - **What has been checked on the real site:** search, result pages, job
   details, the three Apply button types, and opening and filling the
   application form in a practice run.

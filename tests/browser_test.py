@@ -296,6 +296,29 @@ try:
 
             session.page.goto(BASE + "/visibility-settings")
             check("setup screens are not treated as signed in", not session.looks_logged_in())
+
+            print()
+            print("=" * 70)
+            print("17. TAILORED RESUME REPLACES THE DEFAULT FOR ONE APPLICATION")
+            print("=" * 70)
+            tailored_pdf = Path(tmp) / "Jane_Doe_Resume.pdf"
+            tailored_pdf.write_bytes(b"%PDF-1.4\n% tailored resume stand-in\n")
+            tailored_docs = Documents(resume_path=str(tailored_pdf), tailored_resume=True)
+
+            job = session.load_job("1001")
+            status, note = session.apply(job, tailored_docs, dry_run=True)
+            print(f"  practice run: status={status}  note={note}")
+            check("practice run does not upload", status == "dry_run" and "not uploaded" in note, note)
+            check("default resume left attached in a practice run",
+                  session.page.evaluate("() => window.picked.resume") == "Academic Resume.pdf")
+
+            job = session.load_job("1001")
+            status, note = session.apply(job, tailored_docs, dry_run=False)
+            print(f"  real run: status={status}  note={note}")
+            check("application submitted with the tailored resume", status == "applied", status)
+            check("tailored file is what went out",
+                  session.page.get_attribute("#done", "data-resume") == "Jane_Doe_Resume.pdf",
+                  str(session.page.get_attribute("#done", "data-resume")))
 finally:
     server.shutdown()
 

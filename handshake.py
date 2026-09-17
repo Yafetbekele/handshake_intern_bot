@@ -200,6 +200,9 @@ class Documents:
     cover_letter_name: str = ""
     transcript_path: str = ""
     transcript_name: str = ""
+    # When true, resume_path is a resume made for this job: it replaces the
+    # default resume Handshake attaches, but only inside this one application.
+    tailored_resume: bool = False
 
     def name_for(self, kind: str) -> str:
         return str(getattr(self, f"{kind}_name", "") or "").strip()
@@ -984,7 +987,7 @@ class HandshakeSession:
                 return "uncertain", "Quick apply was clicked and no form appeared; it may already be submitted"
             return "failed", "no application dialog appeared"
 
-        attached, attach_note, missing_documents = self._attach_documents(documents)
+        attached, attach_note, missing_documents = self._attach_documents(documents, dry_run)
 
         missing = [f"attach your {kind}" for kind in missing_documents]
         missing += self._missing_required_fields(attached)
@@ -1136,8 +1139,47 @@ class HandshakeSession:
             return None
         return self._wait_for_slot(fieldset, 6) and choice[1]
 
+    def _replace_with_upload(self, fieldset: Locator, path: Path) -> str | None:
+        """Detach whatever a document section holds and upload `path` instead.
+
+        This only changes the document used for this one application. The
+        student's default resume on Handshake is left as it is.
+        """
+        assert self.page is not None
+        if self._slot_filled(fieldset):
+            remove = fieldset.locator(
+                "[data-status='positive'] button[aria-label='Close'], "
+                "[data-status='positive'] button[aria-label*='remove' i]"
+            ).first
+            try:
+                if remove.count() == 0:
+                    return None
+                remove.click()
+            except Exception:
+                return None
+            deadline = time.time() + 6
+            while time.time() < deadline and self._slot_filled(fieldset):
+                self.page.wait_for_timeout(250)
+            if self._slot_filled(fieldset):
+                return None
+
+        upload = fieldset.locator("input[type='file']").first
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            try:
+                if upload.count():
+                    break
+            except Exception:
+                pass
+            self.page.wait_for_timeout(250)
+        try:
+            upload.set_input_files(str(path))
+        except Exception:
+            return None
+        return self._wait_for_slot(fieldset, 30)
+
     def _attach_handshake_sections(
-        self, dialog: Locator, documents: Documents
+        self, dialog: Locator, documents: Documents, dry_run: bool = False
     ) -> tuple[bool, set[str], list[str], list[str]]:
         """Fill Handshake's "Attach your ..." document sections.
 
@@ -1171,6 +1213,20 @@ class HandshakeSession:
             label = re.sub(r"^\s*(attach|upload)\s+(your|a|an)?\s*", "", title, flags=re.I).strip().lower() or "document"
             key = kind if kind != "unknown" else label
 
+            tailored = documents.path_for("resume") if kind == "resume" and documents.tailored_resume else None
+            if tailored is not None:
+                if dry_run:
+                    attached.add(key)
+                    notes.append(f"resume: tailored {tailored.name} ready, not uploaded in a practice run")
+                    continue
+                uploaded = self._replace_with_upload(fieldset, tailored)
+                if uploaded:
+                    attached.add(key)
+                    notes.append(f"resume: tailored '{uploaded}'")
+                else:
+                    missing.append("tailored resume (upload did not finish)")
+                continue
+
             filled = self._slot_filled(fieldset)
             if filled:
                 attached.add(key)
@@ -1202,7 +1258,9 @@ class HandshakeSession:
 
         return found, attached, notes, missing
 
-    def _attach_documents(self, documents: Documents) -> tuple[set[str], str, list[str]]:
+    def _attach_documents(
+        self, documents: Documents, dry_run: bool = False
+    ) -> tuple[set[str], str, list[str]]:
         """Fill every document slot in the dialog.
 
         Returns (kinds attached, note, document sections still empty).
@@ -1212,7 +1270,7 @@ class HandshakeSession:
         scope = dialog if dialog is not None else self.page.locator("body")
 
         if dialog is not None:
-            found, attached, notes, missing = self._attach_handshake_sections(dialog, documents)
+            found, attached, notes, missing = self._attach_handshake_sections(dialog, documents, dry_run)
             if found:
                 note = ", ".join(notes) if notes else "no documents attached"
                 return attached, note, missing

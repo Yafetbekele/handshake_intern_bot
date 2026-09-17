@@ -1,0 +1,104 @@
+{
+  "_about": "A made-up student for tests. The real profile lives in profile/career_profile.json and never leaves the student's computer.",
+  "contact": {
+    "name": "Jane Doe",
+    "location": "Springfield, IL",
+    "phone": "(555) 010-0000",
+    "email": "jane.doe@example.edu",
+    "linkedin": "https://www.linkedin.com/in/jane-doe-example"
+  },
+  "education": [
+    {
+      "id": "state-u",
+      "school": "State University",
+      "degree": "B.S. in Computer Science",
+      "standing": "Junior",
+      "expected_graduation": "May 2028",
+      "gpa": "3.7",
+      "coursework": [
+        {"name": "CS 210 (Data Structures)", "tags": ["software", "data structures", "algorithms", "programming"]},
+        {"name": "CS 330 (Computer Architecture)", "tags": ["hardware", "architecture", "embedded", "digital"]},
+        {"name": "CS 340 (Databases)", "tags": ["sql", "database", "data", "backend"]}
+      ]
+    },
+    {
+      "id": "central-high",
+      "school": "Central High School, Springfield, Illinois",
+      "degree": "Class of 2023",
+      "honors": [
+        {"name": "Robotics Club Captain", "tags": ["robotics", "leadership", "embedded"]},
+        {"name": "Honor Roll", "tags": ["academic"]}
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "heading": "PROJECTS",
+      "entries": [
+        {
+          "id": "weather-station",
+          "organization": "Home Weather Station",
+          "role": "Personal Project",
+          "dates": "2025",
+          "priority": 8,
+          "always_include": true,
+          "facts": [
+            "Built a weather station with a Raspberry Pi and three sensors.",
+            "Wrote the data logger in Python.",
+            "Logs readings every 5 minutes to a SQLite database."
+          ],
+          "bullets": [
+            {"text": "Built a weather station with a Raspberry Pi and three sensors.", "tags": ["hardware", "embedded", "sensors", "raspberry pi", "iot"]},
+            {"text": "Wrote a Python data logger that stores readings every 5 minutes in SQLite.", "tags": ["python", "sql", "database", "data", "software"]}
+          ],
+          "skills": ["Python", "Raspberry Pi", "SQLite"],
+          "never_claim": ["machine learning", "sold", "customers"]
+        }
+      ]
+    },
+    {
+      "heading": "WORK EXPERIENCE",
+      "entries": [
+        {
+          "id": "campus-help-desk",
+          "organization": "State University IT Help Desk",
+          "role": "Student Technician",
+          "dates": "2024 - Present",
+          "priority": 7,
+          "always_include": true,
+          "facts": [
+            "Answers student and staff tech support requests.",
+            "Resolves about 40 tickets per week.",
+            "Sets up laptops and printers."
+          ],
+          "bullets": [
+            {"text": "Resolve about 40 support tickets per week for students and staff.", "tags": ["support", "troubleshooting", "customer", "it"]},
+            {"text": "Set up laptops and printers for campus offices.", "tags": ["hardware", "it", "setup", "support"]},
+            {"text": "Troubleshoot hardware and software problems for students and staff.", "tags": ["troubleshooting", "debugging", "hardware", "software"]}
+          ],
+          "skills": ["Troubleshooting", "Customer service"]
+        },
+        {
+          "id": "cafe",
+          "organization": "Corner Cafe",
+          "role": "Barista",
+          "dates": "2022 - 2023",
+          "priority": 3,
+          "trim_first": true,
+          "facts": ["Made drinks and handled the register."],
+          "bullets": [
+            {"text": "Made drinks and handled the register during busy shifts.", "tags": ["customer", "service", "cash"]}
+          ],
+          "skills": ["Customer service"]
+        }
+      ]
+    }
+  ],
+  "skills": [
+    {"name": "Python", "tags": ["python", "software", "scripting"]},
+    {"name": "SQL", "tags": ["sql", "database", "data"]},
+    {"name": "Raspberry Pi", "tags": ["raspberry pi", "embedded", "hardware", "iot"]},
+    {"name": "Java", "tags": ["java", "software"]},
+    {"name": "Troubleshooting", "tags": ["troubleshooting", "support", "debugging"]}
+  ]
+}

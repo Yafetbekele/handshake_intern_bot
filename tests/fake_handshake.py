@@ -175,7 +175,11 @@ PAGE = """<!doctype html><html><head><title>Jobs | Handshake</title></head><body
     <h3>Details from {employer_name}:</h3>
     <p>Applying requires a few documents. Attach them below and get one step closer to your next job!</p>
     <fieldset><h4>Attach your resume</h4>
-      <div role="status" data-status="positive"><h5>Academic Resume.pdf</h5><a href="/docs/1">Preview document</a></div>
+      <div id="slot-resume">
+        <div role="status" data-status="positive"><h5>Academic Resume.pdf</h5><a href="/docs/1">Preview document</a>
+          <span><button type="button" aria-label="Close" onclick="removeResume()"></button></span>
+        </div>
+      </div>
     </fieldset>
     {extra}
     <button type="button" onclick="submitApp()">Submit Application</button>
@@ -199,6 +203,15 @@ function closeDialog() {{
   document.getElementById('dialog').style.display = 'none';
 }}
 document.addEventListener('keydown', function (e) {{ if (e.key === 'Escape') closeDialog(); }});
+function removeResume() {{
+  // Detaching the default resume shows Handshake's search box and "Upload new".
+  window.picked.resume = '';
+  document.getElementById('slot-resume').innerHTML =
+    '<div data-hook="apply-modal-document-search">'
+    + '<input type="search" role="combobox" placeholder="Search your resumes" />'
+    + '<input type="file" name="file-Resume" onchange="setTimeout(function (f) {{ pick(\\'resume\\', f.files[0].name); }}, 400, this)" />'
+    + '</div>';
+}}
 function openList(kind) {{
   document.getElementById('lb-' + kind).style.display = 'block';
 }}

@@ -41,6 +41,7 @@ class LaunchSettings:
     transcript: str = ""
     locations: str = ""
     base_url: str = ""
+    tailor_resume: bool = False
 
 
 # ------------------------------------------------------------------ settings
@@ -116,6 +117,9 @@ def build_args(settings: LaunchSettings) -> list[str]:
     for location in settings.locations.split(","):
         if location.strip():
             args += ["--location", location.strip()]
+
+    if settings.tailor_resume:
+        args.append("--tailor-resume")
 
     if command == "apply":
         args += ["--max", str(int(settings.max_applications))]
@@ -263,6 +267,13 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
     mode_var.trace_add("write", sync_max_state)
     sync_max_state()
 
+    tailor_var = tk.BooleanVar(value=bool(initial.tailor_resume))
+    ttk.Checkbutton(
+        modes_box,
+        text="Tailor my resume to each job (uses your Claude plan, only true facts from your profile)",
+        variable=tailor_var,
+    ).grid(row=len(MODES) + 1, column=0, sticky="w", pady=(8, 0))
+
     optional = ttk.LabelFrame(frame, text="Optional", padding=10)
     optional.grid(row=5, column=0, columnspan=3, sticky="ew", pady=6)
     optional.columnconfigure(1, weight=1)
@@ -299,6 +310,7 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
             transcript=transcript_var.get().strip(),
             locations=locations_var.get().strip(),
             base_url=base_url_var.get().strip(),
+            tailor_resume=bool(tailor_var.get()),
         )
 
     def start() -> None:
@@ -350,6 +362,47 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
 
 
 # ----------------------------------------------------------------------- run
+
+
+def offer_claude_sign_in() -> None:
+    """If Claude Code isn't signed in, offer to open its sign-in, then wait for it."""
+    import tailor
+
+    ready, _why = tailor.claude_ready()
+    if ready:
+        return
+    exe = tailor.find_claude()
+    if not exe:
+        _message(
+            "info",
+            "Tailoring without Claude",
+            "Claude Code wasn't found, so resumes will be tailored with rules from "
+            "your profile instead. That still only uses true facts.",
+        )
+        return
+    wants = _message(
+        "yesno",
+        "Sign in to Claude for tailoring",
+        "Resume tailoring uses Claude through your existing Claude plan, at no extra cost.\n\n"
+        "Claude Code needs to be signed in once. Open the sign-in now?\n\n"
+        "A window will open and your browser will ask you to log in to Claude. "
+        "If you choose No, resumes are tailored with rules from your profile instead.",
+    )
+    if not wants:
+        return
+    flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+    try:
+        subprocess.Popen([exe, "auth", "login"], creationflags=flags)
+    except OSError as exc:
+        print(f"Could not open Claude sign-in: {exc}")
+        return
+    _message(
+        "info",
+        "Finish signing in",
+        "Finish signing in to Claude in your browser, then click OK here to continue.",
+    )
+    ready, why = tailor.claude_ready()
+    print("Claude sign-in: " + ("done." if ready else f"not finished, using rules instead. {why}"))
 
 
 def manual_list_page() -> Path:
@@ -425,6 +478,9 @@ def run(
         print("Cancelled.")
         return 0
     save_settings(settings, settings_path)
+
+    if settings.tailor_resume and check_setup:
+        offer_claude_sign_in()
 
     print("\nA browser window will open. If Handshake asks you to sign in, do it")
     print("there with your school login. You only need to do this once.\n")

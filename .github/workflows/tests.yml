@@ -33,3 +33,6 @@ jobs:
 
       - name: Double-click launcher tests
         run: python tests/launcher_test.py
+
+      - name: Resume tailoring tests
+        run: python tests/tailor_test.py

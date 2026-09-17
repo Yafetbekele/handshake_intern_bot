@@ -168,6 +168,7 @@ class ManualList:
         url: str,
         score: float,
         reason: str,
+        resume_path: str = "",
     ) -> None:
         now = datetime.now().isoformat(timespec="seconds")
         existing = self._items.get(job_id, {})
@@ -179,6 +180,7 @@ class ManualList:
             "url": url or existing.get("url", ""),
             "score": round(max(float(score), float(existing.get("score", 0))), 4),
             "reason": reason,
+            "resume": resume_path or existing.get("resume", ""),
             "first_seen": existing.get("first_seen", now),
             "last_seen": now,
         }
@@ -194,24 +196,33 @@ class ManualList:
         rows = self.items()
         self.json_path.write_text(json.dumps(self._items, indent=2, sort_keys=True), encoding="utf-8")
 
-        fields = ["score_percent", "title", "employer", "location", "reason", "url", "first_seen", "last_seen"]
+        fields = ["score_percent", "title", "employer", "location", "reason", "url", "resume", "first_seen", "last_seen"]
         with self.csv_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             for row in rows:
                 writer.writerow(dict(row, score_percent=round(float(row.get("score", 0)) * 100)))
 
-        self.html_path.write_text(_manual_list_html(rows), encoding="utf-8")
+        self.html_path.write_text(_manual_list_html(rows, self.folder), encoding="utf-8")
         return self.html_path
 
 
-def _manual_list_html(rows: list[dict[str, Any]]) -> str:
+def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
+    import os
     from html import escape
 
     body = []
     for row in rows:
         percent = round(float(row.get("score", 0)) * 100)
         url = escape(str(row.get("url", "")), quote=True)
+        resume_cell = ""
+        resume = str(row.get("resume", ""))
+        if resume and Path(resume).exists():
+            try:
+                link = os.path.relpath(resume, folder).replace(os.sep, "/")
+            except ValueError:  # on a different drive
+                link = Path(resume).resolve().as_uri()
+            resume_cell = f"<a href='{escape(link, quote=True)}'>Open</a>"
         body.append(
             "<tr>"
             f"<td class='num'>{percent}%</td>"
@@ -219,10 +230,11 @@ def _manual_list_html(rows: list[dict[str, Any]]) -> str:
             f"<td>{escape(str(row.get('employer', '')))}</td>"
             f"<td>{escape(str(row.get('location', '')))}</td>"
             f"<td>{escape(str(row.get('reason', '')))}</td>"
+            f"<td>{resume_cell}</td>"
             f"<td class='when'>{escape(str(row.get('first_seen', ''))[:10])}</td>"
             "</tr>"
         )
-    table = "\n".join(body) or "<tr><td colspan='6'>Nothing here yet.</td></tr>"
+    table = "\n".join(body) or "<tr><td colspan='7'>Nothing here yet.</td></tr>"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -247,7 +259,7 @@ def _manual_list_html(rows: list[dict[str, Any]]) -> str:
 <h1>Internships to apply to yourself</h1>
 <p>{len(rows)} good matches the assistant could not apply to for you, best match first. Each link opens the posting on Handshake.</p>
 <div class="wrap"><table>
-<thead><tr><th>Match</th><th>Internship</th><th>Employer</th><th>Location</th><th>Why it's here</th><th>Found</th></tr></thead>
+<thead><tr><th>Match</th><th>Internship</th><th>Employer</th><th>Location</th><th>Why it's here</th><th>Tailored resume</th><th>Found</th></tr></thead>
 <tbody>
 {table}
 </tbody></table></div>

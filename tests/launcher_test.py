@@ -55,6 +55,13 @@ check("confirm mode has neither flag", "--dry-run" not in args and "--auto-submi
 
 args = build_args(LaunchSettings(mode="auto", **base))
 check("automatic mode adds --auto-submit", "--auto-submit" in args)
+check("tailoring is off unless ticked", "--tailor-resume" not in args)
+check(
+    "ticking tailoring adds --tailor-resume",
+    "--tailor-resume" in build_args(LaunchSettings(mode="confirm", tailor_resume=True, **base)),
+)
+check("tailoring works for the matches-only mode too",
+      "--tailor-resume" in build_args(LaunchSettings(mode="search", tailor_resume=True, **base)))
 
 args = build_args(
     LaunchSettings(

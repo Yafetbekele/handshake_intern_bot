@@ -23,12 +23,14 @@ import os
 import random
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import majors
 import matcher
 import resume_parser
+import tailor
 from handshake import Documents, HandshakeSession, Job
 from storage import MANUAL_FOLDER_NAME, Ledger, ManualList, write_followups, write_report
 
@@ -39,6 +41,54 @@ def manual_list() -> ManualList:
     """The lasting list of good internships to apply to by hand."""
     folder = os.environ.get("HSBOT_MANUAL_DIR") or str(HERE / MANUAL_FOLDER_NAME)
     return ManualList(folder)
+
+
+class ResumeTailor:
+    """Makes a resume for each job when tailoring is switched on."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.enabled = bool(config.get("tailor_resume", False))
+        self.use_ai = False
+        self.profile_path = Path(str(config.get("profile_path") or tailor.PROFILE_PATH))
+        if not self.enabled:
+            return
+        if not self.profile_path.exists():
+            print(f"[warn] Resume tailoring is on, but there is no profile at {self.profile_path}.")
+            print("       Using your default resume instead.")
+            self.enabled = False
+            return
+        if config.get("use_ai_for_tailoring", True):
+            self.use_ai, why = tailor.claude_ready()
+            how = "Claude, checked against your profile" if self.use_ai else "rules from your profile"
+            print(f"Resume tailoring: {how}. {why}")
+        else:
+            print("Resume tailoring: rules from your profile (AI switched off).")
+
+    def for_job(self, job: Job) -> Path | None:
+        if not self.enabled:
+            return None
+        print("  tailoring your resume for this job...")
+        try:
+            result = tailor.tailor_resume(
+                job.job_id, job.title, job.employer, job.description,
+                use_ai=self.use_ai, profile_path=self.profile_path,
+            )
+        except Exception as exc:  # never let tailoring stop an application run
+            print(f"  [warn] tailoring failed ({type(exc).__name__}: {exc}); using your default resume")
+            return None
+        how = {"ai": "Claude", "rules": "rules", "saved": "made earlier"}.get(result.method, result.method)
+        print(f"  tailored resume ({how}): {result.path}")
+        for note in result.notes[:3]:
+            print(f"    {note}")
+        return result.path
+
+
+def add_to_manual_list(
+    manual: ManualList, tailorer: ResumeTailor, job: Job, result: matcher.MatchResult, reason: str
+) -> None:
+    resume = tailorer.for_job(job) if tailorer.enabled else None
+    manual.add(job.job_id, job.title, job.employer, job.location, job.url,
+               result.score, reason, resume_path=str(resume or ""))
 
 
 def manual_reason(status: str, note: str) -> str:
@@ -73,6 +123,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_search_pages": 4,
     "delay_between_applications_seconds": [20, 45],
     "auto_submit": False,
+    "tailor_resume": False,
+    "use_ai_for_tailoring": True,
+    "profile_path": "",
     "headless": False,
 }
 
@@ -109,6 +162,10 @@ def load_config(args: argparse.Namespace) -> dict[str, Any]:
         if value is not None:
             config[key] = value
 
+    if getattr(args, "tailor_resume", False):
+        config["tailor_resume"] = True
+    if getattr(args, "no_ai", False):
+        config["use_ai_for_tailoring"] = False
     if getattr(args, "auto_submit", False):
         config["auto_submit"] = True
     if getattr(args, "headless", False):
@@ -297,11 +354,13 @@ def cmd_search(args: argparse.Namespace) -> int:
         )
 
     manual = manual_list()
+    tailorer = ResumeTailor(config)
     for job, result in kept:
         if job.apply_kind in {"external", "unknown"}:
             status = "skipped_external" if job.apply_kind == "external" else "no_apply_button"
-            manual.add(job.job_id, job.title, job.employer, job.location, job.url,
-                       result.score, manual_reason(status, ""))
+            if tailorer.enabled:
+                print(f"\n{job.label()}")
+            add_to_manual_list(manual, tailorer, job, result, manual_reason(status, ""))
     if len(manual):
         page = manual.save()
         print(f"\nInternships to apply to yourself ({len(manual)}): {page}")
@@ -339,6 +398,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
             print("Cancelled.")
             return 1
 
+    tailorer = ResumeTailor(config)
+
     with HandshakeSession(config, load_selectors(), HERE / "data" / "browser_profile") as session:
         if not session.ensure_logged_in():
             return 1
@@ -354,6 +415,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
         # here, but good matches are still worth the student's time.
         followups: list[dict[str, Any]] = []
         manual = manual_list()
+        # Filled in after the applications, so tailoring never delays them.
+        pending_manual: list[tuple[Job, matcher.MatchResult, str]] = []
         kept = []
         for job, result in matches:
             if job.apply_kind == "external":
@@ -362,8 +425,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
                     job.location, job.url, result.score, "apply on employer site",
                 )
                 followups.append(followup_row(job, result, "apply on employer site"))
-                manual.add(job.job_id, job.title, job.employer, job.location, job.url,
-                           result.score, manual_reason("skipped_external", ""))
+                pending_manual.append((job, result, manual_reason("skipped_external", "")))
             else:
                 kept.append((job, result))
 
@@ -412,7 +474,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
                     counts["declined"] = counts.get("declined", 0) + 1
                     continue
 
-            status, note = session.apply(job, documents, dry_run=dry_run)
+            job_documents = documents
+            tailored = tailorer.for_job(job)
+            if tailored is not None:
+                job_documents = replace(documents, resume_path=str(tailored), tailored_resume=True)
+
+            status, note = session.apply(job, job_documents, dry_run=dry_run)
             counts[status] = counts.get(status, 0) + 1
             ledger.record(
                 job.job_id, status, job.title, job.employer,
@@ -422,8 +489,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
             if status in {"needs_manual", "failed", "uncertain"}:
                 followups.append(followup_row(job, result, f"{status}: {note}"))
-                manual.add(job.job_id, job.title, job.employer, job.location, job.url,
-                           result.score, manual_reason(status, note))
+                pending_manual.append((job, result, manual_reason(status, note)))
             elif status == "applied":
                 manual.remove(job.job_id)
 
@@ -434,6 +500,14 @@ def cmd_apply(args: argparse.Namespace) -> int:
                     pause = random.uniform(float(delay_low), float(delay_high))
                     print(f"  waiting {pause:.0f}s before the next one")
                     time.sleep(pause)
+
+    if pending_manual:
+        if tailorer.enabled:
+            banner(f"Tailoring resumes for {len(pending_manual)} internships to apply to yourself")
+        for job, result, reason in pending_manual:
+            if tailorer.enabled:
+                print(f"\n{job.label()}")
+            add_to_manual_list(manual, tailorer, job, result, reason)
 
     banner("Run summary")
     for status, count in sorted(counts.items(), key=lambda kv: -kv[1]):
@@ -498,6 +572,18 @@ def add_shared_arguments(sub: argparse.ArgumentParser) -> None:
         help="local transcript uploaded when a posting requires one",
     )
     sub.add_argument("--major", help="skip the prompt and target this major")
+    sub.add_argument(
+        "--tailor-resume",
+        action="store_true",
+        dest="tailor_resume",
+        help="make a resume for each job from profile/career_profile.json",
+    )
+    sub.add_argument(
+        "--no-ai",
+        action="store_true",
+        dest="no_ai",
+        help="tailor with rules only, without Claude",
+    )
     sub.add_argument(
         "--location",
         action="append",
