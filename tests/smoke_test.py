@@ -37,8 +37,42 @@ with tempfile.TemporaryDirectory() as _tmp:
     reloaded.save()
     assert len(ManualList(folder)) == 1, "applied postings drop off"
     print("  saved, deduplicated, ordered, escaped, removed")
+
+    ranked = ManualList(Path(_tmp) / "ranked", limit=3)
+    ranked.add("a", "Old entry", "", "", "u/a", 1.0, "r")  # saved before fit scores
+    ranked.add("b", "Great", "", "", "u/b", 0.6, "r", fit=90, why=["matches your resume: fpga"])
+    ranked.add("c", "Good", "", "", "u/c", 1.0, "r", fit=70)
+    ranked.add("d", "Weak", "", "", "u/d", 1.0, "r", fit=40)
+    assert [r["job_id"] for r in ranked.items()] == ["b", "c", "d", "a"], "fit first, unranked last"
+    assert ranked.unranked()[0]["job_id"] == "a"
+    ranked.set_fit("a", 55, [])
+    assert not ranked.would_keep("e", 30) and ranked.would_keep("e", 60) and ranked.would_keep("d", 1)
+    page = ranked.save()
+    assert [r["job_id"] for r in ManualList(Path(_tmp) / "ranked").items()] == ["b", "c", "a"], "only the best 3 kept"
+    assert "matches your resume: fpga" in page.read_text(encoding="utf-8")
+    assert ManualList(Path(_tmp) / "x").limit == 50
+    print("  ordered by fit and capped")
     print("  OK")
-    print()
+
+print("=" * 70)
+print("0b. APPLY-YOURSELF FIT SCORE")
+print("=" * 70)
+import ranking
+
+ce_major = majors.resolve("Computer Engineering")
+terms = ranking.resume_terms(None, {"skills": [{"name": "Verilog", "tags": ["fpga", "communication"]}, {"name": "C++"}]})
+assert "verilog" in terms and "fpga" in terms and "communication" not in terms, terms
+undergrad = ranking.fit("FPGA Engineering Intern", "Open to undergraduate sophomores. Verilog and C++.", 1.0, terms, ce_major)
+phd = ranking.fit("FPGA Engineering Intern", "Must be pursuing a PhD. 3+ years of experience.", 1.0, terms, ce_major)
+unrelated = ranking.fit("Computer Engineering Intern", "Help with events.", 1.0, terms, ce_major)
+senior = ranking.fit("Senior FPGA Engineer", "Verilog and C++.", 1.0, terms, ce_major)
+print(f"  undergrad {undergrad.points}  phd {phd.points}  no resume overlap {unrelated.points}  senior {senior.points}")
+assert undergrad.points > unrelated.points > phd.points, "all 100% preset matches, now spread apart"
+assert undergrad.points > senior.points
+assert "open to undergraduates" in undergrad.why and "asks for grad or PhD students" in phd.why
+assert 0 <= phd.points <= 100 and undergrad.points <= 100
+print("  OK")
+print()
 
 RESUME = Path(__file__).with_name("sample_resume.txt")
 

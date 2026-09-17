@@ -29,6 +29,7 @@ from typing import Any
 
 import majors
 import matcher
+import ranking
 import resume_parser
 import tailor
 from handshake import Documents, HandshakeSession, Job
@@ -139,12 +140,34 @@ def save_learned_answers(profile_path: Path, learned: list[dict[str, Any]]) -> i
     return added
 
 
+class ListRanker:
+    """Fit scores for the apply-yourself list only; applying still uses the preset."""
+
+    def __init__(self, profile: resume_parser.ResumeProfile | None, major: majors.MajorProfile, profile_path: Path) -> None:
+        self.major = major
+        self.terms = ranking.load_resume_terms(profile, profile_path)
+
+    def fit(self, title: str, text: str, score: float) -> ranking.Fit:
+        return ranking.fit(title, text, score, self.terms, self.major)
+
+    def rank_saved(self, manual: ManualList) -> None:
+        """Give entries saved before fit scores existed a score from their title."""
+        for item in manual.unranked():
+            found = self.fit(item.get("title", ""), item.get("employer", ""), float(item.get("score", 0)))
+            manual.set_fit(item["job_id"], found.points, found.why)
+
+
 def add_to_manual_list(
-    manual: ManualList, tailorer: ResumeTailor, job: Job, result: matcher.MatchResult, reason: str
+    manual: ManualList, tailorer: ResumeTailor, job: Job, result: matcher.MatchResult, reason: str,
+    ranker: ListRanker,
 ) -> None:
+    found = ranker.fit(job.title, f"{job.employer} {job.location} {job.description}", result.score)
+    if not manual.would_keep(job.job_id, found.points):
+        print(f"  left off the apply-yourself list (fit {found.points:.0f} is below its best {manual.limit}): {job.title[:50]}")
+        return
     resume = tailorer.for_job(job) if tailorer.enabled else None
     manual.add(job.job_id, job.title, job.employer, job.location, job.url,
-               result.score, reason, resume_path=str(resume or ""))
+               result.score, reason, resume_path=str(resume or ""), fit=found.points, why=found.why)
 
 
 def manual_reason(status: str, note: str) -> str:
@@ -467,12 +490,14 @@ def cmd_search(args: argparse.Namespace) -> int:
 
     manual = manual_list()
     tailorer = ResumeTailor(config)
+    ranker = ListRanker(profile, major, tailorer.profile_path)
+    ranker.rank_saved(manual)
     for job, result in kept:
         if job.apply_kind in {"external", "unknown"}:
             status = "skipped_external" if job.apply_kind == "external" else "no_apply_button"
             if tailorer.enabled:
                 print(f"\n{job.label()}")
-            add_to_manual_list(manual, tailorer, job, result, manual_reason(status, ""))
+            add_to_manual_list(manual, tailorer, job, result, manual_reason(status, ""), ranker)
     if len(manual):
         page = manual.save()
         print(f"\nInternships to apply to yourself ({len(manual)}): {page}")
@@ -527,6 +552,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
         # here, but good matches are still worth the student's time.
         followups: list[dict[str, Any]] = []
         manual = manual_list()
+        ranker = ListRanker(profile, major, tailorer.profile_path)
+        ranker.rank_saved(manual)
         # Filled in after the applications, so tailoring never delays them.
         pending_manual: list[tuple[Job, matcher.MatchResult, str]] = []
         kept = []
@@ -632,12 +659,15 @@ def cmd_apply(args: argparse.Namespace) -> int:
                     time.sleep(pause)
 
     if pending_manual:
+        # Best fits first, so they get their spots and resumes before weaker ones.
+        pending_manual.sort(key=lambda entry: -ranker.fit(
+            entry[0].title, f"{entry[0].employer} {entry[0].location} {entry[0].description}", entry[1].score).points)
         if tailorer.enabled:
             banner(f"Tailoring resumes for {len(pending_manual)} internships to apply to yourself")
         for job, result, reason in pending_manual:
             if tailorer.enabled:
                 print(f"\n{job.label()}")
-            add_to_manual_list(manual, tailorer, job, result, reason)
+            add_to_manual_list(manual, tailorer, job, result, reason, ranker)
 
     saved = save_learned_answers(tailorer.profile_path, learned_answers)
     if saved:

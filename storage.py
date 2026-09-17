@@ -141,10 +141,14 @@ class ManualList:
     clickable links (apply_yourself.html), a spreadsheet copy
     (apply_yourself.csv), and the data behind them (list.json). A posting drops
     off the list once the tool applies to it.
+
+    Rows are ordered by their fit score (see ranking.py), and only the best
+    `limit` are kept.
     """
 
-    def __init__(self, folder: str | Path) -> None:
+    def __init__(self, folder: str | Path, limit: int = 50) -> None:
         self.folder = Path(folder)
+        self.limit = limit
         self.json_path = self.folder / "list.json"
         self.csv_path = self.folder / "apply_yourself.csv"
         self.html_path = self.folder / "apply_yourself.html"
@@ -169,6 +173,8 @@ class ManualList:
         score: float,
         reason: str,
         resume_path: str = "",
+        fit: float | None = None,
+        why: list[str] | None = None,
     ) -> None:
         now = datetime.now().isoformat(timespec="seconds")
         existing = self._items.get(job_id, {})
@@ -181,6 +187,8 @@ class ManualList:
             "score": round(max(float(score), float(existing.get("score", 0))), 4),
             "reason": reason,
             "resume": resume_path or existing.get("resume", ""),
+            "fit": float(fit) if fit is not None else existing.get("fit"),
+            "why": list(why) if why is not None else existing.get("why", []),
             "first_seen": existing.get("first_seen", now),
             "last_seen": now,
         }
@@ -188,32 +196,66 @@ class ManualList:
     def remove(self, job_id: str) -> None:
         self._items.pop(job_id, None)
 
+    def unranked(self) -> list[dict[str, Any]]:
+        """Entries saved before fit scores existed."""
+        return [item for item in self._items.values() if item.get("fit") is None]
+
+    def set_fit(self, job_id: str, fit: float, why: list[str]) -> None:
+        if job_id in self._items:
+            self._items[job_id]["fit"] = float(fit)
+            self._items[job_id]["why"] = list(why)
+
+    @staticmethod
+    def _sort_key(row: dict[str, Any]) -> tuple[float, float, str]:
+        fit = row.get("fit")
+        return (-float(fit if fit is not None else -1), -float(row.get("score", 0)), row.get("title", ""))
+
     def items(self) -> list[dict[str, Any]]:
-        return sorted(self._items.values(), key=lambda r: (-float(r.get("score", 0)), r.get("title", "")))
+        return sorted(self._items.values(), key=self._sort_key)
+
+    def would_keep(self, job_id: str, fit: float) -> bool:
+        """Whether an entry with this fit makes the best `limit`."""
+        if job_id in self._items or not self.limit or len(self._items) < self.limit:
+            return True
+        worst = self.items()[self.limit - 1].get("fit")
+        return worst is None or float(fit) > float(worst)
+
+    def trim(self) -> list[dict[str, Any]]:
+        """Drop everything below the best `limit` entries; returns what was dropped."""
+        rows = self.items()
+        dropped = rows[self.limit:] if self.limit and self.limit > 0 else []
+        for row in dropped:
+            self._items.pop(row["job_id"], None)
+        return dropped
 
     def save(self) -> Path:
         self.folder.mkdir(parents=True, exist_ok=True)
+        self.trim()
         rows = self.items()
         self.json_path.write_text(json.dumps(self._items, indent=2, sort_keys=True), encoding="utf-8")
 
-        fields = ["score_percent", "title", "employer", "location", "reason", "url", "resume", "first_seen", "last_seen"]
+        fields = ["fit", "score_percent", "title", "employer", "location", "reason", "why", "url", "resume", "first_seen", "last_seen"]
         with self.csv_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             for row in rows:
-                writer.writerow(dict(row, score_percent=round(float(row.get("score", 0)) * 100)))
+                writer.writerow(dict(row, score_percent=round(float(row.get("score", 0)) * 100), why="; ".join(row.get("why") or [])))
 
-        self.html_path.write_text(_manual_list_html(rows, self.folder), encoding="utf-8")
+        self.html_path.write_text(_manual_list_html(rows, self.folder, self.limit), encoding="utf-8")
         return self.html_path
 
 
-def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
+def _manual_list_html(rows: list[dict[str, Any]], folder: Path, limit: int = 50) -> str:
     import os
     from html import escape
 
     body = []
     for row in rows:
         percent = round(float(row.get("score", 0)) * 100)
+        fit = row.get("fit")
+        fit_cell = f"{round(float(fit))}" if fit is not None else "&ndash;"
+        why = "; ".join(str(w) for w in (row.get("why") or []))
+        why_line = f"<div class='why'>{escape(why)}</div>" if why else ""
         url = escape(str(row.get("url", "")), quote=True)
         job_id = escape(str(row.get("job_id", "")), quote=True)
         resume_cell = ""
@@ -226,8 +268,9 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
             resume_cell = f"<a href='{escape(link, quote=True)}'>Open</a>"
         body.append(
             f"<tr data-id='{job_id}'>"
+            f"<td class='num fit'>{fit_cell}</td>"
             f"<td class='num'>{percent}%</td>"
-            f"<td><a href='{url}' target='_blank' rel='noopener'>{escape(str(row.get('title', '')))}</a></td>"
+            f"<td><a href='{url}' target='_blank' rel='noopener'>{escape(str(row.get('title', '')))}</a>{why_line}</td>"
             f"<td>{escape(str(row.get('employer', '')))}</td>"
             f"<td>{escape(str(row.get('location', '')))}</td>"
             f"<td>{escape(str(row.get('reason', '')))}</td>"
@@ -236,7 +279,7 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
             "<td class='act'><button type='button' class='remove'>Remove</button></td>"
             "</tr>"
         )
-    table = "\n".join(body) or "<tr><td colspan='8'>Nothing here yet.</td></tr>"
+    table = "\n".join(body) or "<tr><td colspan='9'>Nothing here yet.</td></tr>"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -256,6 +299,8 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
   a {{ color:var(--accent); font-weight:600; text-decoration:none; }}
   a:hover {{ text-decoration:underline; }}
   .num {{ font-variant-numeric:tabular-nums; white-space:nowrap; }}
+  .fit {{ font-weight:700; }}
+  .why {{ color:var(--muted); font-size:13px; margin-top:2px; }}
   .when {{ color:var(--muted); white-space:nowrap; }}
   .act {{ white-space:nowrap; }}
   button {{ font:inherit; font-size:13px; color:var(--fg); background:var(--soft); border:1px solid var(--line); border-radius:6px; padding:4px 10px; cursor:pointer; }}
@@ -266,13 +311,13 @@ def _manual_list_html(rows: list[dict[str, Any]], folder: Path) -> str:
 </style></head>
 <body><main>
 <h1>Internships to apply to yourself</h1>
-<p>{len(rows)} good matches the assistant could not apply to for you, best match first. Each link opens the posting on Handshake.</p>
+<p>{len(rows)} good matches the assistant could not apply to for you, best fit first (at most {limit}). Fit is out of 100: the major match, overlap with your resume, how open it is to undergraduates, and the title. Each link opens the posting on Handshake.</p>
 <div class="bar">
   <span id="count"></span>
   <button type="button" class="linkish" id="toggle" hidden>Show removed</button>
 </div>
 <div class="wrap"><table>
-<thead><tr><th>Match</th><th>Internship</th><th>Employer</th><th>Location</th><th>Why it's here</th><th>Tailored resume</th><th>Found</th><th></th></tr></thead>
+<thead><tr><th>Fit</th><th>Match</th><th>Internship</th><th>Employer</th><th>Location</th><th>Why it's here</th><th>Tailored resume</th><th>Found</th><th></th></tr></thead>
 <tbody>
 {table}
 </tbody></table></div>

@@ -223,7 +223,9 @@ employer's own website, and forms with questions or documents the tool won't
 fill in.
 
 - Double-click `apply_yourself.html` for a page with a link to each posting,
-  best match first. `apply_yourself.csv` has the same list for Excel.
+  best fit first. `apply_yourself.csv` has the same list for Excel.
+- The list keeps at most **50** postings. When a better one turns up, the
+  weakest drops off (and gets no tailored resume).
 - The list grows across runs without duplicates.
 - A posting drops off once the tool applies to it.
 - **Remove** hides an internship you've handled or don't want. Your browser
@@ -231,6 +233,22 @@ fill in.
   rebuilds it. **Show removed** brings hidden ones back into view, and
   **Restore** puts one back on the list. Removing only affects the page in that
   browser. The spreadsheet copy still lists everything.
+
+**How the list is ordered.** Lots of postings score 100% on the major preset,
+so this list uses a finer **Fit** score out of 100. It only orders this list;
+what the tool applies to automatically is unchanged.
+
+| Part | Up to | What earns it |
+| --- | --- | --- |
+| Major match | 30 | the same preset score used for applying |
+| Your resume | 35 | skills and topics from your resume and `profile/career_profile.json` that the posting mentions (in the title counts double) |
+| Student level | 25 | undergraduate-friendly wording ("undergraduate", "rising junior", "entry level", an intern title) scores high; PhD or graduate-only, years of experience, or a senior title score low |
+| Title | 10 | the title names your major, one of its title words, or one of your skills |
+
+Under each title the page shows why, for example
+"matches your resume: fpga, verilog; open to undergraduates". Words that say
+little on their own (communication, testing, systems and so on) are left out
+in `GENERIC_TERMS` in `ranking.py`.
 
 The launcher offers to open this page when a run finishes. Each run's own
 summary is also saved to `data/follow_up.csv`.
@@ -480,6 +498,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
 | `storage.py` | Application ledger, apply-yourself list and CSV export. |
+| `ranking.py` | Fit score that orders the apply-yourself list. |
 | `tailor.py` | Resume tailoring, fact checks and the one-page PDF. |
 | `profile/career_profile.json` | Your facts for tailoring. Local only. |
 | `selectors.json` | CSS fallbacks, the part to edit when Handshake changes. |
