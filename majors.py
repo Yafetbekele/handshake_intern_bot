@@ -23,7 +23,7 @@ class MajorProfile:
 MAJORS: list[MajorProfile] = [
     MajorProfile(
         name="Computer Science",
-        aliases=["cs", "comp sci", "computing", "computer engineering", "cse"],
+        aliases=["cs", "comp sci", "computing", "cse"],
         queries=[
             "software engineering intern",
             "software developer intern",
@@ -36,6 +36,24 @@ MAJORS: list[MajorProfile] = [
             "javascript", "cpp", "algorithms", "data structures", "api", "backend",
             "frontend", "full stack", "git", "debugging", "testing", "cloud",
             "distributed systems", "code review", "agile",
+        ],
+    ),
+    MajorProfile(
+        name="Computer Engineering",
+        aliases=["cmpe", "cpe", "compe", "comp eng", "computer eng", "cmpen"],
+        queries=[
+            "computer engineering intern",
+            "embedded systems intern",
+            "hardware engineering intern",
+            "firmware intern",
+            "digital design intern",
+        ],
+        keywords=[
+            "embedded", "firmware", "hardware", "microcontroller", "fpga", "verilog",
+            "vhdl", "rtl", "digital design", "computer architecture", "cpp", "circuit",
+            "pcb", "schematic", "soc", "asic", "signal", "debugging", "oscilloscope",
+            "linux", "python", "bring up", "i2c", "spi", "can bus", "device drivers",
+            "real time", "prototype", "testing", "git", "assembly", "simulation",
         ],
     ),
     MajorProfile(
@@ -480,10 +498,16 @@ def resolve(major_input: str) -> MajorProfile:
             norm = _normalize(candidate)
             if len(norm) >= 4:
                 candidates.append((norm, profile))
-    candidates.sort(key=lambda pair: -len(pair[0]))
+    # A longer name inside what was typed wins: "electrical engineering"
+    # beats a bare "engineering" for "electrical engineering technology".
+    for norm, profile in sorted(candidates, key=lambda pair: -len(pair[0])):
+        if _contains_phrase(query, norm):
+            return profile
 
-    for norm, profile in candidates:
-        if _contains_phrase(query, norm) or _contains_phrase(norm, query):
+    # Typed something shorter, like "computer": take the closest name that
+    # contains it, not the longest one that happens to mention it.
+    for norm, profile in sorted(candidates, key=lambda pair: len(pair[0])):
+        if _contains_phrase(norm, query):
             return profile
 
     # Token overlap hit.

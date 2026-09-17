@@ -90,8 +90,9 @@ This applies to nothing. It ranks matches and writes `data/matches.csv`.
 python main.py search --resume "C:\Users\you\Documents\resume.pdf"
 ```
 
-It asks for your major, showing a numbered list of 27 majors with tuned search
-terms. You can type any other major instead and it searches on that name.
+It asks for your major, showing a numbered list of 28 majors with tuned search
+terms, including Computer Engineering. You can type any other major instead and
+it searches on that name.
 
 It searches the way you would. It opens Handshake's job search, types each
 search into the box, and turns on the Internship filter. It then reuses the

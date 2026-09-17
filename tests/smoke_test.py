@@ -60,6 +60,11 @@ print("=" * 70)
 cases = {
     "Computer Science": "Computer Science",
     "cs": "Computer Science",
+    "Computer Engineering": "Computer Engineering",
+    "computer engineering": "Computer Engineering",
+    "cmpe": "Computer Engineering",
+    "CPE": "Computer Engineering",
+    "Electrical and Computer Engineering": "Electrical Engineering",
     "comp sci": "Computer Science",
     "Electrical Engineering": "Electrical Engineering",
     "mech e": "Mechanical Engineering",
