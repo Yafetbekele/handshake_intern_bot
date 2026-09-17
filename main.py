@@ -689,8 +689,8 @@ def add_shared_arguments(sub: argparse.ArgumentParser) -> None:
     sub.add_argument(
         "--scan",
         type=int,
-        default=60,
-        help="maximum postings to open and score in one run (default 60)",
+        default=300,
+        help="maximum postings to open and score in one run (default 300)",
     )
     sub.add_argument("--base-url", dest="base_url", help="your school's Handshake URL")
     sub.add_argument(

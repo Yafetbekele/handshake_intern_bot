@@ -292,7 +292,7 @@ skipped or declined.
 | `--strictness broad` | How picky matching is: broad, balanced or strict. |
 | `--min-score 0.15` | An exact minimum score instead of a strictness level. |
 | `--pages 6` | Read more search result pages per query. |
-| `--scan 100` | Open and score more postings in one run. |
+| `--scan 100` | How many postings to open and score in one run. The default is 300. |
 | `--max 10` | Cap applications this run. |
 | `--dry-run` | Fill applications but never submit. |
 | `--auto-submit` | Submit without asking each time. |
