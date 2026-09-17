@@ -18,7 +18,7 @@
   "include_undated_internships": true,
   "internship_only": true,
 
-  "min_match_score": 0.22,
+  "min_match_score": 0.25,
   "max_applications_per_run": 15,
   "max_search_pages": 4,
   "delay_between_applications_seconds": [20, 45],

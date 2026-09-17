@@ -60,6 +60,11 @@ check(
     "ticking tailoring adds --tailor-resume",
     "--tailor-resume" in build_args(LaunchSettings(mode="confirm", tailor_resume=True, **base)),
 )
+check("pickiness defaults to balanced", args[args.index("--strictness") + 1] == "balanced")
+broad_args = build_args(LaunchSettings(mode="confirm", strictness="broad", **base))
+check("broad pickiness passed through", broad_args[broad_args.index("--strictness") + 1] == "broad")
+check("unknown pickiness reported",
+      any("picky" in p for p in validate(LaunchSettings(mode="search", strictness="whatever", **base))))
 check("tailoring works for the matches-only mode too",
       "--tailor-resume" in build_args(LaunchSettings(mode="search", tailor_resume=True, **base)))
 

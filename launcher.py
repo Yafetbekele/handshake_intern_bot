@@ -30,6 +30,13 @@ MODES: list[tuple[str, str]] = [
 ]
 MODE_KEYS = {key for key, _ in MODES}
 
+STRICTNESS_CHOICES: list[tuple[str, str]] = [
+    ("broad", "Broad: most internships in my field"),
+    ("balanced", "Balanced"),
+    ("strict", "Strict: only close matches"),
+]
+STRICTNESS_KEYS = {key for key, _ in STRICTNESS_CHOICES}
+
 
 @dataclass
 class LaunchSettings:
@@ -42,6 +49,7 @@ class LaunchSettings:
     locations: str = ""
     base_url: str = ""
     tailor_resume: bool = False
+    strictness: str = "balanced"
 
 
 # ------------------------------------------------------------------ settings
@@ -58,6 +66,8 @@ def load_settings(path: Path = SETTINGS_PATH) -> LaunchSettings:
     settings = LaunchSettings(**{k: v for k, v in raw.items() if k in known})
     if settings.mode not in MODE_KEYS:
         settings.mode = "search"
+    if settings.strictness not in STRICTNESS_KEYS:
+        settings.strictness = "balanced"
     try:
         settings.max_applications = int(settings.max_applications)
     except (TypeError, ValueError):
@@ -88,6 +98,8 @@ def validate(settings: LaunchSettings) -> list[str]:
 
     if settings.mode not in MODE_KEYS:
         problems.append("Choose what the assistant should do.")
+    if settings.strictness not in STRICTNESS_KEYS:
+        problems.append("Choose how picky matching should be.")
 
     for label, value in (("cover letter", settings.cover_letter), ("transcript", settings.transcript)):
         if value.strip() and not Path(value).expanduser().is_file():
@@ -120,6 +132,8 @@ def build_args(settings: LaunchSettings) -> list[str]:
 
     if settings.tailor_resume:
         args.append("--tailor-resume")
+    if settings.strictness in STRICTNESS_KEYS:
+        args += ["--strictness", settings.strictness]
 
     if command == "apply":
         args += ["--max", str(int(settings.max_applications))]
@@ -274,6 +288,20 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
         variable=tailor_var,
     ).grid(row=len(MODES) + 1, column=0, sticky="w", pady=(8, 0))
 
+    strict_labels = {key: label for key, label in STRICTNESS_CHOICES}
+    strict_keys = {label: key for key, label in STRICTNESS_CHOICES}
+    strict_var = tk.StringVar(value=strict_labels.get(initial.strictness, strict_labels["balanced"]))
+    strict_row = ttk.Frame(modes_box)
+    strict_row.grid(row=len(MODES) + 2, column=0, sticky="w", pady=(8, 0))
+    ttk.Label(strict_row, text="How picky:").grid(row=0, column=0, sticky="w")
+    ttk.Combobox(
+        strict_row,
+        textvariable=strict_var,
+        values=[label for _, label in STRICTNESS_CHOICES],
+        state="readonly",
+        width=36,
+    ).grid(row=0, column=1, padx=6)
+
     optional = ttk.LabelFrame(frame, text="Optional", padding=10)
     optional.grid(row=5, column=0, columnspan=3, sticky="ew", pady=6)
     optional.columnconfigure(1, weight=1)
@@ -311,6 +339,7 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
             locations=locations_var.get().strip(),
             base_url=base_url_var.get().strip(),
             tailor_resume=bool(tailor_var.get()),
+            strictness=strict_keys.get(strict_var.get(), "balanced"),
         )
 
     def start() -> None:

@@ -88,49 +88,58 @@ print()
 print("=" * 70)
 print("3. SCORING")
 print("=" * 70)
+ce = majors.resolve("Computer Engineering")
 cs = majors.resolve("Computer Science")
-weights = matcher.build_weights(profile, cs.keywords, ["internship"])
-print(f"  vocabulary size: {len(weights)}")
+print(f"  Computer Engineering preset: {len(ce.core)} core, {len(ce.related)} related, {len(ce.title_words)} title words")
 
-good = """Software Engineering Intern - Summer 2027
-Acme Cloud, Seattle WA
-Join our backend team building distributed systems in Python and Java.
-You will write REST API endpoints, participate in code review, use Git and
-Docker, and work in an agile environment. Coursework in data structures and
-algorithms required. This is a paid summer internship for undergraduates."""
+cases = [
+    # (label, title, description, major, expected verdict at the balanced cutoff)
+    ("textbook FPGA internship", "FPGA Engineering Intern - Summer 2027",
+     "Design and verify FPGA logic in Verilog and VHDL with simulation and an oscilloscope.", ce, True),
+    ("names the major in the title", "Computer Engineering Intern", "General office duties.", ce, True),
+    ("names the major in the description", "Engineering Intern",
+     "Open to Mechanical, Electrical and Computer Engineering majors.", ce, True),
+    ("embedded work under a vague title", "R&D Intern",
+     "Support hardware testing and embedded firmware bring up.", ce, True),
+    ("software internship for Computer Engineering", "Software Engineering Intern",
+     "Build backend services in Python and Java with Git.", ce, True),
+    ("veterinary internship", "Veterinary Clinic Intern", "Care for animals and clean kennels.", ce, False),
+    ("marketing internship", "Marketing Intern", "Social media campaigns and content creation.", ce, False),
+    ("strong Computer Science match", "Software Engineering Intern - Summer 2027",
+     "Backend distributed systems in Python and Java, REST API, code review, data structures and algorithms.", cs, True),
+]
+balanced = matcher.STRICTNESS["balanced"]
+for label, title, text, major, expected in cases:
+    result = matcher.score_posting(title, text, major)
+    verdict = matcher.passes(result, balanced)
+    print(f"  {result.percent:3d}%  {label:46s} {'pass' if verdict else 'skip'}  {result.reasons[:1]}")
+    assert verdict == expected, f"{label}: expected {'pass' if expected else 'skip'}, got {result.percent}%"
 
-bad = """Summer Intern - Veterinary Clinic Assistant
-Happy Paws, Dayton OH
-Help our veterinary staff care for animals, clean kennels, greet clients,
-and assist with feeding schedules. No prior experience necessary."""
+anchor_title = matcher.score_posting("Computer Engineering Intern", "", ce)
+anchor_body = matcher.score_posting("Intern", "We welcome computer engineering students.", ce)
+assert anchor_title.percent == 100, anchor_title.percent
+assert anchor_body.percent >= 90, anchor_body.percent
+assert matcher.passes(anchor_body, matcher.STRICTNESS["strict"]), "naming the major must pass even on strict"
+print("  OK (the major's name nearly guarantees a pass, even on strict)")
 
-mid = """Data Analyst Intern, Summer 2027
-Insight Corp, Remote
-Analyze datasets with SQL and Python, build dashboards in Tableau, and
-present insights to stakeholders."""
+no_resume_effect = matcher.score_posting("FPGA Engineering Intern", "Verilog and FPGA.", ce)
+assert no_resume_effect.percent == matcher.score_posting("FPGA Engineering Intern", "Verilog and FPGA.", ce).percent
+print("  OK (scores depend only on the posting and the major)")
 
-for label, text in [("strong CS match", good), ("weak match", bad), ("partial match", mid)]:
-    result = matcher.score_job(text, weights)
-    print(f"  {label:18s} {result.percent:3d}%  top: {', '.join(result.matched[:6])}")
+# The cutoff compares the same rounded number that is shown.
+shown_22 = matcher.MatchResult(score=0.2199)
+assert shown_22.percent == 22 and matcher.passes(shown_22, 0.22)
+assert not matcher.passes(matcher.MatchResult(score=0.2149), 0.22)
+print("  OK (a posting shown at 22% passes a 22% cutoff)")
 
-strong = matcher.score_job(good, weights)
-weak = matcher.score_job(bad, weights)
-partial = matcher.score_job(mid, weights)
-assert strong.score > partial.score > weak.score, (strong.score, partial.score, weak.score)
-assert strong.score > 0.22, "strong match should clear the default threshold"
-assert weak.score < 0.22, "weak match should fail the default threshold"
-print("  OK (ranking is strong > partial > weak)")
+levels = matcher.STRICTNESS
+assert levels["broad"] < levels["balanced"] < levels["strict"]
+print(f"  OK (pickiness levels: {', '.join(f'{k} {round(v * 100)}%' for k, v in levels.items())})")
 
-ee = majors.resolve("Electrical Engineering")
-ee_terms = matcher.title_terms_for(ee.name, ee.queries)
-plain = matcher.score_job("Generic company description.", weights)
-boosted = matcher.score_job("Generic company description.", weights, "Electrical Engineering Internship", ee_terms)
-unrelated = matcher.score_job("Generic company description.", weights, "Marketing Intern", ee_terms)
-print(f"  title boost: plain {plain.percent}%, EE title {boosted.percent}%, unrelated title {unrelated.percent}%")
-assert "electrical" in ee_terms and "intern" not in ee_terms and "engineering" not in ee_terms
-assert boosted.score >= plain.score + 0.24 and unrelated.score == plain.score
-assert any("electrical" in r for r in boosted.reasons)
-print("  OK (field words in the title add a boost)")
+# Whole words only: "c++" must not fire inside unrelated text, "embedded" must.
+assert matcher.score_posting("Intern", "We embedded our team in the field.", ce).matched == ["embedded"]
+assert "rtl" not in matcher.score_posting("Intern", "Ask about our portal.", ce).matched
+print("  OK (terms match whole words only)")
 
 print()
 print("=" * 70)

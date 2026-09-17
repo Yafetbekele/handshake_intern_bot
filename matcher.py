@@ -1,21 +1,28 @@
-"""Score a job posting against the student's major and resume.
+"""Decide whether a job posting fits the student's major.
 
-The score is a transparent weighted-overlap number, not a black box: every
+Postings are scored against a fixed preset per major (see majors.json), never
+against the resume, so the same major always means the same thing. Every
 match is reported so the student can see why a posting ranked where it did.
 
-Weights
-    major keyword present in resume too : 3.0
-    major keyword                       : 2.0
-    resume skill or topic               : 1.5
-    frequent resume word                : 1.0
+How the score is built, from 0 to 100%:
+
+* Anchor: the major's own name, such as "computer engineering".
+  In the job title it scores 100%. Anywhere in the posting, at least 90%.
+* Content: core terms are worth 3 points, related terms 1 point.
+  12 points earn the full 75% for content, so four core terms are enough.
+* Title: a field word in the job title, such as "FPGA", adds 25%.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from resume_parser import ResumeProfile, normalize
+from resume_parser import normalize
+
+if TYPE_CHECKING:
+    from majors import MajorProfile
 
 SUMMER_PATTERNS = [
     r"\bsummer\b",
@@ -39,6 +46,21 @@ NEGATIVE_TITLE_PATTERNS = [
     r"\bmanager of interns\b",
 ]
 
+CORE_POINTS = 3.0
+RELATED_POINTS = 1.0
+FULL_CONTENT_POINTS = 12.0
+CONTENT_SHARE = 0.75
+TITLE_BONUS = 0.25
+ANCHOR_IN_TITLE = 1.0
+ANCHOR_IN_POSTING = 0.90
+
+# Pickiness levels offered in the launcher, as minimum scores.
+STRICTNESS = {
+    "broad": 0.15,
+    "balanced": 0.25,
+    "strict": 0.40,
+}
+
 
 @dataclass
 class MatchResult:
@@ -51,112 +73,47 @@ class MatchResult:
         return round(self.score * 100)
 
 
-def build_weights(
-    profile: ResumeProfile | None,
-    major_keywords: list[str],
-    extra_keywords: list[str] | None = None,
-) -> dict[str, float]:
-    """Combine major keywords, resume signal and user extras into one vocabulary."""
-    weights: dict[str, float] = {}
-    resume_terms: set[str] = set()
-
-    if profile is not None:
-        resume_terms |= set(profile.token_counts)
-        resume_terms |= set(profile.skills)
-        resume_terms |= set(profile.phrases)
-
-    for keyword in major_keywords:
-        term = keyword.lower().strip()
-        if not term:
-            continue
-        # A major keyword the resume also backs up is the strongest signal.
-        weights[term] = 3.0 if term in resume_terms else 2.0
-
-    for keyword in extra_keywords or []:
-        term = keyword.lower().strip()
-        if term:
-            weights[term] = max(weights.get(term, 0.0), 3.0)
-
-    if profile is not None:
-        for skill in profile.skills:
-            weights[skill] = max(weights.get(skill, 0.0), 1.5)
-        for phrase in profile.phrases:
-            weights[phrase] = max(weights.get(phrase, 0.0), 1.5)
-        # Frequent resume words fill in domain vocabulary the lists missed.
-        for token, count in profile.token_counts.most_common(60):
-            if count < 2:
-                continue
-            weights.setdefault(token, 1.0)
-
-    return weights
+def _padded(text: str) -> str:
+    return f" {normalize(text)} "
 
 
-TITLE_BONUS = 0.25
-
-# Words too generic to say which field a job title belongs to.
-GENERIC_TITLE_WORDS = {
-    "intern", "interns", "internship", "internships", "summer", "co", "op", "coop",
-    "engineering", "engineer", "science", "sciences", "studies", "management",
-    "administration", "systems", "analyst", "associate", "program", "and", "of",
-    "the", "for", "in", "assistant", "research", "student", "services", "general",
-}
+def _has_term(padded_text: str, term: str) -> bool:
+    """Whole-word, case-insensitive match on normalized text."""
+    norm = normalize(term)
+    return bool(norm) and f" {norm} " in padded_text
 
 
-def title_terms_for(major_name: str, queries: list[str]) -> list[str]:
-    """Field words to look for in job titles, from the major and its searches.
-
-    Electrical Engineering with searches like "firmware intern" gives
-    ["electrical", "hardware", "embedded", "firmware"].
-    """
-    terms: list[str] = []
-    for phrase in [major_name, *queries]:
-        for word in re.findall(r"[a-z][a-z&+#]*", phrase.lower()):
-            if len(word) > 2 and word not in GENERIC_TITLE_WORDS and word not in terms:
-                terms.append(word)
-    return terms
+def passes(result: MatchResult, min_score: float) -> bool:
+    """Compare on the same rounded percentage the student sees."""
+    return result.percent >= round(min_score * 100)
 
 
-def score_job(
-    job_text: str,
-    weights: dict[str, float],
-    title: str = "",
-    title_terms: list[str] | tuple[str, ...] = (),
-) -> MatchResult:
-    """Fraction of the weighted vocabulary that the posting mentions, plus a
-    fixed bonus when the job title itself names the student's field."""
-    result = _vocabulary_score(job_text, weights)
-    if title and title_terms:
-        title_words = set(re.findall(r"[a-z][a-z&+#]*", title.lower()))
-        hits = [t for t in title_terms if t in title_words]
-        if hits:
-            result.score = min(result.score + TITLE_BONUS, 1.0)
-            result.reasons.append(f"title mentions {', '.join(hits)}")
-    return result
+def score_posting(title: str, text: str, major: "MajorProfile") -> MatchResult:
+    """Score one posting against a major's fixed preset."""
+    padded_title = _padded(title)
+    padded_all = _padded(f"{title} {text}")
 
+    core_hits = [t for t in dict.fromkeys(major.core) if _has_term(padded_all, t)]
+    related_hits = [t for t in dict.fromkeys(major.related) if _has_term(padded_all, t) and t not in core_hits]
+    title_hits = [t for t in dict.fromkeys(major.title_words) if _has_term(padded_title, t)]
+    anchors_in_title = [a for a in major.anchors if _has_term(padded_title, a)]
+    anchors_anywhere = [a for a in major.anchors if _has_term(padded_all, a)]
 
-def _vocabulary_score(job_text: str, weights: dict[str, float]) -> MatchResult:
-    if not weights:
-        return MatchResult(score=0.0)
+    points = CORE_POINTS * len(core_hits) + RELATED_POINTS * len(related_hits)
+    score = min(points / FULL_CONTENT_POINTS, 1.0) * CONTENT_SHARE
+    reasons: list[str] = []
+    if title_hits:
+        score += TITLE_BONUS
+        reasons.append(f"title mentions {', '.join(title_hits[:3])}")
+    if anchors_in_title:
+        score = max(score, ANCHOR_IN_TITLE)
+        reasons.insert(0, f"title names the major: {anchors_in_title[0]}")
+    elif anchors_anywhere:
+        score = max(score, ANCHOR_IN_POSTING)
+        reasons.insert(0, f"posting names the major: {anchors_anywhere[0]}")
 
-    haystack = normalize(job_text)
-    haystack_tokens = set(haystack.split())
-
-    total = sum(weights.values())
-    earned = 0.0
-    matched: list[str] = []
-
-    for term, weight in weights.items():
-        if " " in term:
-            hit = term in haystack
-        else:
-            hit = term in haystack_tokens
-        if hit:
-            earned += weight
-            matched.append(term)
-
-    matched.sort(key=lambda t: -weights[t])
-    score = earned / total if total else 0.0
-    return MatchResult(score=min(score, 1.0), matched=matched)
+    matched = list(dict.fromkeys(anchors_anywhere + core_hits + related_hits))
+    return MatchResult(score=min(score, 1.0), matched=matched, reasons=reasons)
 
 
 def _matches_any(text: str, patterns: list[str]) -> bool:

@@ -1,0 +1,1668 @@
+{
+  "_how_this_works": "Each major is scored against the same fixed terms, whatever resume is used. anchors: the major's own name; a posting that says it almost always passes (in the title it scores 100%, in the description at least 90%). core: strong signs of the field, worth 3 points each. related: supporting terms, worth 1 point each. title_words: a posting whose title contains one gets a 25 point boost. 12 points of core and related terms together earn the full 75 points for content. queries: what is typed into Handshake's job search. Edit freely; terms are matched as whole words, ignoring case.",
+  "majors": [
+    {
+      "name": "Computer Engineering",
+      "aliases": [
+        "cmpe",
+        "cpe",
+        "compe",
+        "comp eng",
+        "computer eng",
+        "cmpen"
+      ],
+      "queries": [
+        "computer engineering intern",
+        "embedded systems intern",
+        "hardware engineering intern",
+        "firmware intern",
+        "digital design intern"
+      ],
+      "anchors": [
+        "computer engineering",
+        "computer engineer",
+        "cmpe",
+        "electrical and computer engineering",
+        "electrical computer engineering"
+      ],
+      "core": [
+        "fpga",
+        "verilog",
+        "vhdl",
+        "systemverilog",
+        "rtl",
+        "asic",
+        "vlsi",
+        "soc",
+        "embedded",
+        "embedded systems",
+        "firmware",
+        "microcontroller",
+        "microcontrollers",
+        "computer architecture",
+        "digital design",
+        "digital logic",
+        "hardware design",
+        "chip design",
+        "device drivers",
+        "embedded c",
+        "risc-v",
+        "arm cortex",
+        "bare metal",
+        "rtos",
+        "hardware description language",
+        "logic design",
+        "timing analysis",
+        "synthesis"
+      ],
+      "related": [
+        "hardware",
+        "c++",
+        "python",
+        "assembly",
+        "linux",
+        "pcb",
+        "schematic",
+        "circuit",
+        "circuits",
+        "oscilloscope",
+        "logic analyzer",
+        "i2c",
+        "spi",
+        "uart",
+        "can bus",
+        "signal processing",
+        "simulation",
+        "verification",
+        "debugging",
+        "bring up",
+        "prototype",
+        "testing",
+        "git",
+        "matlab",
+        "electronics",
+        "sensors",
+        "robotics",
+        "software",
+        "algorithms",
+        "data structures",
+        "networking",
+        "cybersecurity",
+        "hardware security",
+        "semiconductor",
+        "computer science",
+        "electrical engineering"
+      ],
+      "title_words": [
+        "computer",
+        "embedded",
+        "hardware",
+        "firmware",
+        "fpga",
+        "asic",
+        "vlsi",
+        "rtl",
+        "digital",
+        "silicon",
+        "chip",
+        "soc",
+        "verification",
+        "software",
+        "electrical",
+        "systems",
+        "robotics",
+        "semiconductor"
+      ]
+    },
+    {
+      "name": "Computer Science",
+      "aliases": [
+        "cs",
+        "comp sci",
+        "computing",
+        "cse"
+      ],
+      "queries": [
+        "software engineering intern",
+        "software developer intern",
+        "backend intern",
+        "frontend intern",
+        "machine learning intern"
+      ],
+      "anchors": [
+        "computer science",
+        "software engineering",
+        "software engineer",
+        "software developer"
+      ],
+      "core": [
+        "software development",
+        "programming",
+        "algorithms",
+        "data structures",
+        "object oriented",
+        "backend",
+        "frontend",
+        "full stack",
+        "web development",
+        "api",
+        "apis",
+        "rest",
+        "distributed systems",
+        "cloud",
+        "machine learning",
+        "artificial intelligence",
+        "databases",
+        "operating systems",
+        "mobile development",
+        "devops",
+        "microservices",
+        "computer science"
+      ],
+      "related": [
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "c++",
+        "c#",
+        "rust",
+        "sql",
+        "react",
+        "node",
+        "aws",
+        "azure",
+        "gcp",
+        "docker",
+        "kubernetes",
+        "git",
+        "linux",
+        "testing",
+        "debugging",
+        "agile",
+        "code review",
+        "unit testing",
+        "ci cd",
+        "data",
+        "security",
+        "networking",
+        "html",
+        "css"
+      ],
+      "title_words": [
+        "software",
+        "developer",
+        "backend",
+        "frontend",
+        "full stack",
+        "web",
+        "mobile",
+        "cloud",
+        "devops",
+        "machine learning",
+        "ai",
+        "data",
+        "platform",
+        "application",
+        "programmer",
+        "computer"
+      ]
+    },
+    {
+      "name": "Data Science",
+      "aliases": [
+        "data analytics",
+        "analytics",
+        "statistics",
+        "stats",
+        "data"
+      ],
+      "queries": [
+        "data science intern",
+        "data analyst intern",
+        "business intelligence intern",
+        "machine learning intern"
+      ],
+      "anchors": [
+        "data science",
+        "data scientist",
+        "data analytics",
+        "data analyst"
+      ],
+      "core": [
+        "statistics",
+        "statistical",
+        "machine learning",
+        "data analysis",
+        "predictive modeling",
+        "regression",
+        "classification",
+        "data visualization",
+        "a b testing",
+        "experimentation",
+        "etl",
+        "data pipeline",
+        "data warehouse",
+        "business intelligence",
+        "forecasting",
+        "time series",
+        "deep learning",
+        "natural language processing",
+        "feature engineering"
+      ],
+      "related": [
+        "python",
+        "sql",
+        "pandas",
+        "numpy",
+        "scikit-learn",
+        "tensorflow",
+        "pytorch",
+        "tableau",
+        "power bi",
+        "excel",
+        "spark",
+        "dashboard",
+        "dashboards",
+        "jupyter",
+        "snowflake",
+        "bigquery",
+        "reporting",
+        "insights",
+        "modeling",
+        "analytics",
+        "data",
+        "metrics",
+        "kpi",
+        "survey"
+      ],
+      "title_words": [
+        "data",
+        "analytics",
+        "analyst",
+        "science",
+        "scientist",
+        "machine learning",
+        "ai",
+        "statistics",
+        "business intelligence",
+        "insights",
+        "quantitative"
+      ]
+    },
+    {
+      "name": "Electrical Engineering",
+      "aliases": [
+        "ee",
+        "electrical",
+        "electrical and computer engineering",
+        "ece"
+      ],
+      "queries": [
+        "electrical engineering intern",
+        "hardware engineering intern",
+        "embedded systems intern",
+        "firmware intern"
+      ],
+      "anchors": [
+        "electrical engineering",
+        "electrical engineer",
+        "electrical and computer engineering",
+        "electrical computer engineering"
+      ],
+      "core": [
+        "circuit design",
+        "analog",
+        "power electronics",
+        "power systems",
+        "pcb design",
+        "pcb",
+        "schematic",
+        "signal processing",
+        "rf",
+        "control systems",
+        "electromagnetics",
+        "embedded systems",
+        "fpga",
+        "microcontroller",
+        "power distribution",
+        "motor control",
+        "high voltage",
+        "substation",
+        "electronics",
+        "circuits"
+      ],
+      "related": [
+        "hardware",
+        "firmware",
+        "digital",
+        "verilog",
+        "vhdl",
+        "matlab",
+        "simulink",
+        "oscilloscope",
+        "multimeter",
+        "altium",
+        "cadence",
+        "spice",
+        "ltspice",
+        "autocad",
+        "c++",
+        "python",
+        "testing",
+        "debugging",
+        "sensors",
+        "batteries",
+        "renewable energy",
+        "semiconductor",
+        "instrumentation",
+        "wiring",
+        "prototype",
+        "soldering"
+      ],
+      "title_words": [
+        "electrical",
+        "hardware",
+        "embedded",
+        "firmware",
+        "power",
+        "electronics",
+        "circuit",
+        "rf",
+        "controls",
+        "fpga",
+        "semiconductor",
+        "energy",
+        "test"
+      ]
+    },
+    {
+      "name": "Mechanical Engineering",
+      "aliases": [
+        "me",
+        "mechanical",
+        "mech e",
+        "aerospace",
+        "aeronautical"
+      ],
+      "queries": [
+        "mechanical engineering intern",
+        "design engineering intern",
+        "manufacturing engineering intern",
+        "product engineering intern"
+      ],
+      "anchors": [
+        "mechanical engineering",
+        "mechanical engineer",
+        "aerospace engineering"
+      ],
+      "core": [
+        "cad",
+        "solidworks",
+        "catia",
+        "creo",
+        "nx",
+        "finite element",
+        "fea",
+        "cfd",
+        "thermodynamics",
+        "heat transfer",
+        "fluid mechanics",
+        "machine design",
+        "mechanical design",
+        "gd&t",
+        "tolerance analysis",
+        "manufacturing",
+        "machining",
+        "hvac",
+        "mechanisms",
+        "structural analysis"
+      ],
+      "related": [
+        "ansys",
+        "matlab",
+        "prototype",
+        "prototyping",
+        "3d printing",
+        "assembly",
+        "drawings",
+        "testing",
+        "materials",
+        "robotics",
+        "automation",
+        "lean",
+        "dfm",
+        "quality",
+        "inspection",
+        "cnc",
+        "welding",
+        "vibration",
+        "stress",
+        "product development",
+        "autocad",
+        "onshape"
+      ],
+      "title_words": [
+        "mechanical",
+        "design",
+        "manufacturing",
+        "product",
+        "aerospace",
+        "structures",
+        "thermal",
+        "robotics",
+        "hvac",
+        "propulsion",
+        "mechatronics"
+      ]
+    },
+    {
+      "name": "Civil Engineering",
+      "aliases": [
+        "civil",
+        "structural engineering",
+        "environmental engineering"
+      ],
+      "queries": [
+        "civil engineering intern",
+        "structural engineering intern",
+        "construction management intern",
+        "transportation engineering intern"
+      ],
+      "anchors": [
+        "civil engineering",
+        "civil engineer"
+      ],
+      "core": [
+        "structural",
+        "geotechnical",
+        "transportation",
+        "construction",
+        "surveying",
+        "hydrology",
+        "stormwater",
+        "site design",
+        "land development",
+        "concrete",
+        "steel design",
+        "water resources",
+        "traffic",
+        "pavement",
+        "bridge",
+        "infrastructure"
+      ],
+      "related": [
+        "autocad",
+        "civil 3d",
+        "revit",
+        "gis",
+        "permitting",
+        "inspection",
+        "estimating",
+        "drawings",
+        "specifications",
+        "osha",
+        "field work",
+        "project management",
+        "scheduling",
+        "environmental",
+        "soils",
+        "materials testing"
+      ],
+      "title_words": [
+        "civil",
+        "structural",
+        "construction",
+        "transportation",
+        "geotechnical",
+        "water",
+        "infrastructure",
+        "site",
+        "field"
+      ]
+    },
+    {
+      "name": "Chemical Engineering",
+      "aliases": [
+        "chem e",
+        "cheme",
+        "chemical"
+      ],
+      "queries": [
+        "chemical engineering intern",
+        "process engineering intern",
+        "manufacturing engineering intern"
+      ],
+      "anchors": [
+        "chemical engineering",
+        "chemical engineer"
+      ],
+      "core": [
+        "process engineering",
+        "unit operations",
+        "reactor",
+        "distillation",
+        "mass transfer",
+        "heat transfer",
+        "process design",
+        "process safety",
+        "hazop",
+        "scale up",
+        "pilot plant",
+        "polymers",
+        "catalysis",
+        "separations",
+        "process control"
+      ],
+      "related": [
+        "aspen",
+        "gmp",
+        "yield",
+        "quality",
+        "manufacturing",
+        "lean",
+        "six sigma",
+        "matlab",
+        "chemistry",
+        "laboratory",
+        "safety",
+        "pharmaceutical",
+        "biotech",
+        "energy",
+        "refinery",
+        "p&id"
+      ],
+      "title_words": [
+        "chemical",
+        "process",
+        "manufacturing",
+        "production",
+        "plant",
+        "materials"
+      ]
+    },
+    {
+      "name": "Industrial Engineering",
+      "aliases": [
+        "ie",
+        "industrial",
+        "operations research",
+        "systems engineering"
+      ],
+      "queries": [
+        "industrial engineering intern",
+        "supply chain intern",
+        "operations intern",
+        "process improvement intern"
+      ],
+      "anchors": [
+        "industrial engineering",
+        "industrial engineer",
+        "systems engineering"
+      ],
+      "core": [
+        "process improvement",
+        "lean",
+        "six sigma",
+        "operations research",
+        "optimization",
+        "simulation",
+        "supply chain",
+        "logistics",
+        "throughput",
+        "capacity planning",
+        "time study",
+        "kaizen",
+        "value stream mapping",
+        "facility layout",
+        "quality engineering"
+      ],
+      "related": [
+        "inventory",
+        "scheduling",
+        "forecasting",
+        "operations",
+        "manufacturing",
+        "excel",
+        "python",
+        "sql",
+        "tableau",
+        "data analysis",
+        "warehouse",
+        "ergonomics",
+        "project management",
+        "root cause"
+      ],
+      "title_words": [
+        "industrial",
+        "operations",
+        "process",
+        "supply chain",
+        "logistics",
+        "manufacturing",
+        "systems",
+        "quality",
+        "continuous improvement"
+      ]
+    },
+    {
+      "name": "Biomedical Engineering",
+      "aliases": [
+        "bme",
+        "biomedical",
+        "bioengineering"
+      ],
+      "queries": [
+        "biomedical engineering intern",
+        "medical device intern",
+        "r&d engineering intern"
+      ],
+      "anchors": [
+        "biomedical engineering",
+        "biomedical engineer",
+        "bioengineering"
+      ],
+      "core": [
+        "medical device",
+        "medical devices",
+        "biomaterials",
+        "biomechanics",
+        "medical imaging",
+        "tissue engineering",
+        "design controls",
+        "fda",
+        "iso 13485",
+        "verification and validation",
+        "regulatory",
+        "clinical"
+      ],
+      "related": [
+        "prototype",
+        "testing",
+        "matlab",
+        "solidworks",
+        "cad",
+        "instrumentation",
+        "laboratory",
+        "quality",
+        "sterilization",
+        "risk management",
+        "biology",
+        "signal processing"
+      ],
+      "title_words": [
+        "biomedical",
+        "medical",
+        "device",
+        "clinical",
+        "bioengineering",
+        "r&d",
+        "research"
+      ]
+    },
+    {
+      "name": "Biology",
+      "aliases": [
+        "bio",
+        "biological sciences",
+        "biochemistry",
+        "microbiology",
+        "neuroscience"
+      ],
+      "queries": [
+        "biology intern",
+        "research intern",
+        "laboratory intern",
+        "biotech intern"
+      ],
+      "anchors": [
+        "biology",
+        "biological sciences",
+        "biochemistry",
+        "microbiology",
+        "molecular biology"
+      ],
+      "core": [
+        "cell culture",
+        "pcr",
+        "assay",
+        "assays",
+        "molecular biology",
+        "microscopy",
+        "sequencing",
+        "wet lab",
+        "elisa",
+        "western blot",
+        "genetics",
+        "microbiology",
+        "immunology",
+        "biotechnology"
+      ],
+      "related": [
+        "laboratory",
+        "research",
+        "protocol",
+        "specimen",
+        "data collection",
+        "chromatography",
+        "sterile technique",
+        "pipetting",
+        "biology",
+        "clinical",
+        "field work",
+        "ecology"
+      ],
+      "title_words": [
+        "biology",
+        "lab",
+        "laboratory",
+        "research",
+        "biotech",
+        "scientist",
+        "clinical",
+        "microbiology"
+      ]
+    },
+    {
+      "name": "Chemistry",
+      "aliases": [
+        "chem",
+        "chemical sciences"
+      ],
+      "queries": [
+        "chemistry intern",
+        "analytical chemistry intern",
+        "laboratory intern",
+        "quality control intern"
+      ],
+      "anchors": [
+        "chemistry",
+        "chemist"
+      ],
+      "core": [
+        "analytical chemistry",
+        "organic chemistry",
+        "hplc",
+        "gc ms",
+        "spectroscopy",
+        "synthesis",
+        "titration",
+        "chromatography",
+        "mass spectrometry",
+        "nmr"
+      ],
+      "related": [
+        "laboratory",
+        "quality control",
+        "reagent",
+        "calibration",
+        "sop",
+        "sample preparation",
+        "safety",
+        "gmp",
+        "pharmaceutical",
+        "materials"
+      ],
+      "title_words": [
+        "chemistry",
+        "chemist",
+        "lab",
+        "laboratory",
+        "analytical",
+        "quality"
+      ]
+    },
+    {
+      "name": "Physics",
+      "aliases": [
+        "applied physics",
+        "astronomy",
+        "astrophysics"
+      ],
+      "queries": [
+        "physics intern",
+        "research intern",
+        "optics intern",
+        "engineering intern"
+      ],
+      "anchors": [
+        "physics",
+        "physicist",
+        "applied physics"
+      ],
+      "core": [
+        "optics",
+        "photonics",
+        "laser",
+        "lasers",
+        "quantum",
+        "semiconductor",
+        "vacuum",
+        "cryogenic",
+        "instrumentation",
+        "experimental physics",
+        "computational physics"
+      ],
+      "related": [
+        "matlab",
+        "python",
+        "simulation",
+        "modeling",
+        "measurement",
+        "data analysis",
+        "labview",
+        "electronics",
+        "research",
+        "testing",
+        "c++"
+      ],
+      "title_words": [
+        "physics",
+        "optics",
+        "photonics",
+        "laser",
+        "quantum",
+        "research",
+        "scientist"
+      ]
+    },
+    {
+      "name": "Mathematics",
+      "aliases": [
+        "math",
+        "applied math",
+        "actuarial science"
+      ],
+      "queries": [
+        "quantitative intern",
+        "data analyst intern",
+        "actuarial intern",
+        "research intern"
+      ],
+      "anchors": [
+        "mathematics",
+        "applied mathematics",
+        "actuarial"
+      ],
+      "core": [
+        "quantitative",
+        "probability",
+        "statistics",
+        "linear algebra",
+        "optimization",
+        "stochastic",
+        "numerical methods",
+        "actuarial",
+        "mathematical modeling",
+        "risk modeling"
+      ],
+      "related": [
+        "python",
+        "sql",
+        "excel",
+        "matlab",
+        "modeling",
+        "data analysis",
+        "finance",
+        "machine learning",
+        "research"
+      ],
+      "title_words": [
+        "quantitative",
+        "quant",
+        "actuarial",
+        "analyst",
+        "mathematics",
+        "data",
+        "research",
+        "risk"
+      ]
+    },
+    {
+      "name": "Finance",
+      "aliases": [
+        "fin",
+        "banking",
+        "investment",
+        "financial economics"
+      ],
+      "queries": [
+        "finance intern",
+        "investment banking summer analyst",
+        "financial analyst intern",
+        "corporate finance intern"
+      ],
+      "anchors": [
+        "finance",
+        "financial analyst",
+        "investment banking"
+      ],
+      "core": [
+        "financial modeling",
+        "valuation",
+        "dcf",
+        "equity research",
+        "capital markets",
+        "corporate finance",
+        "financial analysis",
+        "portfolio management",
+        "due diligence",
+        "fp&a",
+        "budgeting",
+        "forecasting",
+        "credit analysis",
+        "mergers and acquisitions"
+      ],
+      "related": [
+        "excel",
+        "powerpoint",
+        "bloomberg",
+        "accounting",
+        "reporting",
+        "variance analysis",
+        "investment",
+        "banking",
+        "risk",
+        "wealth management",
+        "financial statements"
+      ],
+      "title_words": [
+        "finance",
+        "financial",
+        "investment",
+        "banking",
+        "analyst",
+        "capital",
+        "wealth",
+        "treasury",
+        "fp&a"
+      ]
+    },
+    {
+      "name": "Accounting",
+      "aliases": [
+        "acct",
+        "audit",
+        "tax"
+      ],
+      "queries": [
+        "accounting intern",
+        "audit intern",
+        "tax intern"
+      ],
+      "anchors": [
+        "accounting",
+        "accountant"
+      ],
+      "core": [
+        "audit",
+        "tax",
+        "gaap",
+        "reconciliation",
+        "general ledger",
+        "journal entries",
+        "internal controls",
+        "financial statements",
+        "accounts payable",
+        "accounts receivable",
+        "month end close",
+        "cpa"
+      ],
+      "related": [
+        "excel",
+        "quickbooks",
+        "compliance",
+        "reporting",
+        "sap",
+        "oracle",
+        "budget",
+        "payroll",
+        "finance"
+      ],
+      "title_words": [
+        "accounting",
+        "audit",
+        "tax",
+        "accountant",
+        "assurance",
+        "finance"
+      ]
+    },
+    {
+      "name": "Economics",
+      "aliases": [
+        "econ"
+      ],
+      "queries": [
+        "economics intern",
+        "research analyst intern",
+        "data analyst intern",
+        "policy intern"
+      ],
+      "anchors": [
+        "economics",
+        "economist"
+      ],
+      "core": [
+        "econometrics",
+        "economic research",
+        "microeconomics",
+        "macroeconomics",
+        "policy analysis",
+        "regression analysis",
+        "market research",
+        "economic analysis"
+      ],
+      "related": [
+        "stata",
+        "python",
+        "excel",
+        "statistics",
+        "data analysis",
+        "forecasting",
+        "report writing",
+        "policy",
+        "research"
+      ],
+      "title_words": [
+        "economics",
+        "economic",
+        "research",
+        "analyst",
+        "policy",
+        "data"
+      ]
+    },
+    {
+      "name": "Business Administration",
+      "aliases": [
+        "business",
+        "management",
+        "ba",
+        "bba",
+        "entrepreneurship"
+      ],
+      "queries": [
+        "business intern",
+        "business analyst intern",
+        "operations intern",
+        "strategy intern"
+      ],
+      "anchors": [
+        "business administration",
+        "business management"
+      ],
+      "core": [
+        "business analysis",
+        "strategy",
+        "operations",
+        "project management",
+        "market research",
+        "stakeholder management",
+        "process improvement",
+        "business development",
+        "consulting",
+        "kpi"
+      ],
+      "related": [
+        "excel",
+        "powerpoint",
+        "reporting",
+        "presentation",
+        "client",
+        "sales",
+        "marketing",
+        "finance",
+        "crm",
+        "communication",
+        "leadership"
+      ],
+      "title_words": [
+        "business",
+        "operations",
+        "strategy",
+        "management",
+        "consulting",
+        "analyst",
+        "sales",
+        "development"
+      ]
+    },
+    {
+      "name": "Marketing",
+      "aliases": [
+        "advertising",
+        "digital marketing",
+        "brand management"
+      ],
+      "queries": [
+        "marketing intern",
+        "digital marketing intern",
+        "social media intern",
+        "brand intern"
+      ],
+      "anchors": [
+        "marketing"
+      ],
+      "core": [
+        "digital marketing",
+        "social media",
+        "content creation",
+        "campaign",
+        "campaigns",
+        "seo",
+        "email marketing",
+        "brand management",
+        "market research",
+        "copywriting",
+        "advertising"
+      ],
+      "related": [
+        "google analytics",
+        "analytics",
+        "canva",
+        "adobe",
+        "crm",
+        "hubspot",
+        "engagement",
+        "audience",
+        "content",
+        "communications"
+      ],
+      "title_words": [
+        "marketing",
+        "brand",
+        "social media",
+        "content",
+        "digital",
+        "advertising",
+        "growth"
+      ]
+    },
+    {
+      "name": "Information Systems",
+      "aliases": [
+        "mis",
+        "it",
+        "information technology",
+        "cybersecurity",
+        "cyber security"
+      ],
+      "queries": [
+        "information technology intern",
+        "it intern",
+        "cybersecurity intern",
+        "systems analyst intern"
+      ],
+      "anchors": [
+        "information systems",
+        "information technology",
+        "cybersecurity",
+        "cyber security"
+      ],
+      "core": [
+        "it support",
+        "help desk",
+        "network",
+        "networking",
+        "security",
+        "active directory",
+        "siem",
+        "vulnerability",
+        "incident response",
+        "systems administration",
+        "cloud",
+        "identity and access management"
+      ],
+      "related": [
+        "sql",
+        "troubleshooting",
+        "azure",
+        "aws",
+        "compliance",
+        "documentation",
+        "linux",
+        "windows",
+        "python",
+        "servicenow",
+        "firewalls"
+      ],
+      "title_words": [
+        "it",
+        "information",
+        "security",
+        "cyber",
+        "cybersecurity",
+        "systems",
+        "network",
+        "support",
+        "technology"
+      ]
+    },
+    {
+      "name": "Psychology",
+      "aliases": [
+        "psych",
+        "cognitive science",
+        "behavioral science"
+      ],
+      "queries": [
+        "psychology intern",
+        "research assistant intern",
+        "human resources intern",
+        "behavioral health intern"
+      ],
+      "anchors": [
+        "psychology",
+        "psychological"
+      ],
+      "core": [
+        "behavioral health",
+        "research assistant",
+        "counseling",
+        "clinical psychology",
+        "cognitive",
+        "irb",
+        "survey research",
+        "mental health"
+      ],
+      "related": [
+        "spss",
+        "qualitative",
+        "quantitative",
+        "data collection",
+        "literature review",
+        "case notes",
+        "participants",
+        "human resources"
+      ],
+      "title_words": [
+        "psychology",
+        "research",
+        "behavioral",
+        "mental health",
+        "counseling",
+        "clinical"
+      ]
+    },
+    {
+      "name": "Communications",
+      "aliases": [
+        "comm",
+        "public relations",
+        "pr",
+        "journalism",
+        "media studies"
+      ],
+      "queries": [
+        "communications intern",
+        "public relations intern",
+        "media intern",
+        "content intern"
+      ],
+      "anchors": [
+        "communications",
+        "public relations",
+        "journalism"
+      ],
+      "core": [
+        "press release",
+        "media relations",
+        "content creation",
+        "writing",
+        "editing",
+        "storytelling",
+        "social media",
+        "copywriting"
+      ],
+      "related": [
+        "newsletter",
+        "ap style",
+        "outreach",
+        "events",
+        "adobe",
+        "canva",
+        "marketing",
+        "video"
+      ],
+      "title_words": [
+        "communications",
+        "public relations",
+        "media",
+        "content",
+        "writer",
+        "editorial",
+        "journalism"
+      ]
+    },
+    {
+      "name": "Graphic Design",
+      "aliases": [
+        "design",
+        "visual arts",
+        "studio art",
+        "ux",
+        "ui",
+        "ux design"
+      ],
+      "queries": [
+        "design intern",
+        "graphic design intern",
+        "ux design intern",
+        "product design intern"
+      ],
+      "anchors": [
+        "graphic design",
+        "ux design",
+        "ui design"
+      ],
+      "core": [
+        "figma",
+        "adobe creative suite",
+        "photoshop",
+        "illustrator",
+        "indesign",
+        "typography",
+        "branding",
+        "user experience",
+        "user interface",
+        "wireframes",
+        "prototyping"
+      ],
+      "related": [
+        "layout",
+        "portfolio",
+        "mockup",
+        "motion graphics",
+        "after effects",
+        "canva",
+        "visual design",
+        "illustration"
+      ],
+      "title_words": [
+        "design",
+        "designer",
+        "graphic",
+        "ux",
+        "ui",
+        "creative",
+        "visual"
+      ]
+    },
+    {
+      "name": "Political Science",
+      "aliases": [
+        "poli sci",
+        "government",
+        "public policy",
+        "international relations"
+      ],
+      "queries": [
+        "policy intern",
+        "government affairs intern",
+        "legislative intern",
+        "public affairs intern"
+      ],
+      "anchors": [
+        "political science",
+        "public policy"
+      ],
+      "core": [
+        "policy",
+        "legislative",
+        "government affairs",
+        "public affairs",
+        "advocacy",
+        "constituent services",
+        "policy research"
+      ],
+      "related": [
+        "research",
+        "writing",
+        "briefing",
+        "stakeholder",
+        "nonprofit",
+        "campaign",
+        "regulatory"
+      ],
+      "title_words": [
+        "policy",
+        "government",
+        "legislative",
+        "public affairs",
+        "advocacy",
+        "political"
+      ]
+    },
+    {
+      "name": "Nursing",
+      "aliases": [
+        "nurse",
+        "bsn",
+        "health sciences",
+        "public health"
+      ],
+      "queries": [
+        "nursing intern",
+        "healthcare intern",
+        "public health intern",
+        "clinical intern"
+      ],
+      "anchors": [
+        "nursing",
+        "nurse"
+      ],
+      "core": [
+        "patient care",
+        "clinical",
+        "vital signs",
+        "care plan",
+        "triage",
+        "public health",
+        "community health"
+      ],
+      "related": [
+        "hipaa",
+        "charting",
+        "epic",
+        "bls",
+        "cpr",
+        "healthcare",
+        "hospital"
+      ],
+      "title_words": [
+        "nursing",
+        "nurse",
+        "clinical",
+        "patient",
+        "health",
+        "healthcare"
+      ]
+    },
+    {
+      "name": "Education",
+      "aliases": [
+        "teaching",
+        "elementary education",
+        "secondary education"
+      ],
+      "queries": [
+        "education intern",
+        "teaching intern",
+        "youth program intern",
+        "curriculum intern"
+      ],
+      "anchors": [
+        "education",
+        "teaching"
+      ],
+      "core": [
+        "curriculum",
+        "lesson plan",
+        "lesson planning",
+        "classroom",
+        "tutoring",
+        "instruction",
+        "youth development"
+      ],
+      "related": [
+        "students",
+        "assessment",
+        "mentoring",
+        "literacy",
+        "differentiated instruction",
+        "after school"
+      ],
+      "title_words": [
+        "education",
+        "teaching",
+        "teacher",
+        "tutor",
+        "youth",
+        "curriculum",
+        "instructional"
+      ]
+    },
+    {
+      "name": "Environmental Science",
+      "aliases": [
+        "environmental studies",
+        "sustainability",
+        "geology",
+        "earth science"
+      ],
+      "queries": [
+        "environmental intern",
+        "sustainability intern",
+        "environmental science intern",
+        "conservation intern"
+      ],
+      "anchors": [
+        "environmental science",
+        "environmental studies",
+        "sustainability"
+      ],
+      "core": [
+        "gis",
+        "arcgis",
+        "sampling",
+        "water quality",
+        "air quality",
+        "remediation",
+        "conservation",
+        "environmental compliance",
+        "field work",
+        "ecology"
+      ],
+      "related": [
+        "epa",
+        "permitting",
+        "emissions",
+        "data collection",
+        "sustainability",
+        "climate",
+        "energy"
+      ],
+      "title_words": [
+        "environmental",
+        "sustainability",
+        "conservation",
+        "climate",
+        "energy",
+        "gis",
+        "field"
+      ]
+    },
+    {
+      "name": "Supply Chain Management",
+      "aliases": [
+        "logistics",
+        "operations management",
+        "procurement"
+      ],
+      "queries": [
+        "supply chain intern",
+        "logistics intern",
+        "procurement intern",
+        "operations intern"
+      ],
+      "anchors": [
+        "supply chain",
+        "logistics"
+      ],
+      "core": [
+        "procurement",
+        "sourcing",
+        "inventory management",
+        "demand planning",
+        "logistics",
+        "supplier management",
+        "purchasing",
+        "distribution",
+        "transportation"
+      ],
+      "related": [
+        "sap",
+        "erp",
+        "excel",
+        "freight",
+        "warehouse",
+        "purchase order",
+        "lean",
+        "forecasting"
+      ],
+      "title_words": [
+        "supply chain",
+        "logistics",
+        "procurement",
+        "purchasing",
+        "operations",
+        "sourcing",
+        "planning"
+      ]
+    },
+    {
+      "name": "Human Resources",
+      "aliases": [
+        "hr",
+        "human resource management",
+        "organizational behavior"
+      ],
+      "queries": [
+        "human resources intern",
+        "hr intern",
+        "talent acquisition intern",
+        "recruiting intern"
+      ],
+      "anchors": [
+        "human resources"
+      ],
+      "core": [
+        "recruiting",
+        "talent acquisition",
+        "onboarding",
+        "employee relations",
+        "hris",
+        "benefits",
+        "compensation analysis",
+        "training and development"
+      ],
+      "related": [
+        "workday",
+        "compliance",
+        "interview",
+        "sourcing",
+        "engagement",
+        "payroll"
+      ],
+      "title_words": [
+        "hr",
+        "human resources",
+        "recruiting",
+        "talent",
+        "people",
+        "recruiter"
+      ]
+    }
+  ]
+}

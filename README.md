@@ -284,7 +284,8 @@ skipped or declined.
 | `--transcript PATH` | Uploaded when a posting requires a transcript. |
 | `--major NAME` | Skip the prompt and target this major. |
 | `--location CITY` | Preferred location, repeatable. Remote postings always pass. |
-| `--min-score 0.15` | Lower the match threshold when too little gets through. |
+| `--strictness broad` | How picky matching is: broad, balanced or strict. |
+| `--min-score 0.15` | An exact minimum score instead of a strictness level. |
 | `--pages 6` | Read more search result pages per query. |
 | `--scan 100` | Open and score more postings in one run. |
 | `--max 10` | Cap applications this run. |
@@ -296,20 +297,43 @@ skipped or declined.
 
 ## How matching works
 
-The score is a plain weighted overlap, and every run prints which terms
-matched so you can see why a posting ranked where it did.
+Postings are scored against a fixed preset for your major, never against your
+resume. Computer Engineering always means the same terms, whichever resume you
+pick. Every run prints what matched so you can see why a posting passed.
 
-| Signal | Weight |
-| --- | --- |
-| Major keyword your resume also backs up | 3.0 |
-| Major keyword | 2.0 |
-| Tool or topic detected in your resume | 1.5 |
-| Word used repeatedly in your resume | 1.0 |
+The presets live in `majors.json`. Each major has four tiers:
 
-On top of that, a job whose title names your field gets a flat 25 point boost.
-For Electrical Engineering that means titles containing electrical, hardware,
-embedded or firmware. Job descriptions are often generic, so the title is the
-most reliable clue.
+| Tier | Example for Computer Engineering | Effect |
+| --- | --- | --- |
+| Major name | computer engineering, CMPE | In the title: 100%. Anywhere in the posting: at least 90%. |
+| Core terms | FPGA, Verilog, embedded, firmware, ASIC | 3 points each |
+| Related terms | C++, Python, PCB, oscilloscope, Linux | 1 point each |
+| Title words | FPGA, embedded, hardware, software, chip | 25% boost when in the job title |
+
+Core and related points are capped at 12, which is worth 75%. Four core terms
+are enough to max that out. The title boost adds the last 25%.
+
+So a posting that names your major passes on any setting, a textbook FPGA
+internship scores about 88%, and a veterinary internship scores 0%.
+
+### How picky it is
+
+Choose in the launcher, or with `--strictness` on the command line:
+
+| Setting | Minimum score | In practice |
+| --- | --- | --- |
+| Broad | 15% | Most internships in your field, including nearby ones |
+| Balanced | 25% | The default |
+| Strict | 40% | Only close matches |
+
+`--min-score` sets an exact number instead. A posting passes when the
+percentage shown is at least the minimum.
+
+### Editing a major
+
+Open `majors.json` and add or remove terms in any list. Terms match whole words
+regardless of capitalization, so "rtl" won't fire inside "portal". Changes take
+effect on the next run.
 
 A posting also has to clear hard filters before it is scored at all:
 
@@ -324,8 +348,8 @@ A posting also has to clear hard filters before it is scored at all:
 Matches that apply on the employer's own site are kept for your apply-yourself
 list rather than dropped.
 
-If almost nothing gets through, lower `--min-score` to around `0.12` and raise
-`--pages`. If junk gets through, raise it toward `0.35`.
+If almost nothing gets through, choose Broad and raise `--pages`. If postings
+outside your field get through, choose Strict.
 
 ## Settings file
 
@@ -412,7 +436,8 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `main.py` | Command line interface and the run loop. |
 | `handshake.py` | Playwright driver: login, search, job pages, submission. |
 | `matcher.py` | Scoring and the internship, summer and location filters. |
-| `majors.py` | Major to search terms and keywords, with the prompt. |
+| `majors.py` | Loads the majors and asks which one you want. |
+| `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
 | `storage.py` | Application ledger, apply-yourself list and CSV export. |
 | `tailor.py` | Resume tailoring, fact checks and the one-page PDF. |

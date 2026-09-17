@@ -172,7 +172,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "summer_only": True,
     "include_undated_internships": True,
     "internship_only": True,
-    "min_match_score": 0.22,
+    "min_match_score": 0.25,
     "max_applications_per_run": 15,
     "max_search_pages": 4,
     "delay_between_applications_seconds": [20, 45],
@@ -204,6 +204,10 @@ def load_config(args: argparse.Namespace) -> dict[str, Any]:
         config.update({k: v for k, v in user_config.items() if not k.startswith("_")})
 
     # Command line beats the config file.
+    strictness = getattr(args, "strictness", None)
+    if strictness:
+        config["min_match_score"] = matcher.STRICTNESS[strictness]
+
     for key, value in (
         ("resume_path", getattr(args, "resume", None)),
         ("cover_letter_path", getattr(args, "cover_letter", None)),
@@ -254,12 +258,15 @@ def gather_candidates(
     limit_scan: int,
 ) -> list[tuple[Job, matcher.MatchResult]]:
     """Search, open each posting, filter it, and return survivors ranked by score."""
-    weights = matcher.build_weights(
-        profile, major.keywords, list(config.get("extra_keywords", []))
-    )
-    title_terms = matcher.title_terms_for(major.name, list(major.queries))
-    print(f"Scoring vocabulary: {len(weights)} terms")
-    print(f"Job titles get a boost for: {', '.join(title_terms) or 'nothing'}")
+    # Postings are scored on the major's fixed preset, never on the resume.
+    extra = [str(k) for k in config.get("extra_keywords", []) if str(k).strip()]
+    if extra:
+        major = replace(major, core=list(dict.fromkeys(major.core + extra)))
+    min_score = float(config.get("min_match_score", matcher.STRICTNESS["balanced"]))
+    print(f"Scoring on the {major.name} preset: {len(major.core)} core terms, "
+          f"{len(major.related)} related terms, {len(major.title_words)} title words.")
+    print(f"Postings that name the major ({', '.join(major.anchors[:2])}) nearly always pass.")
+    print(f"Minimum match: {round(min_score * 100)}%")
 
     queries = list(major.queries) or [f"{major.name} intern"]
     banner(f"Searching Handshake for {major.name} internships")
@@ -279,7 +286,6 @@ def gather_candidates(
 
     banner(f"Reviewing {len(fresh)} postings")
     kept: list[tuple[Job, matcher.MatchResult]] = []
-    min_score = float(config.get("min_match_score", 0.22))
 
     for index, job_id in enumerate(fresh, start=1):
         job = session.load_job(job_id)
@@ -309,8 +315,8 @@ def gather_candidates(
             print(f"{prefix} skip ({job.apply_kind.replace('_', ' ')}): {job.title[:48]}")
             continue
 
-        result = matcher.score_job(job.search_text, weights, job.title, title_terms)
-        if result.score < min_score:
+        result = matcher.score_posting(job.title, f"{job.employer} {job.location} {job.description}", major)
+        if not matcher.passes(result, min_score):
             print(f"{prefix} skip ({result.percent}% match): {job.title[:52]}")
             continue
 
@@ -424,7 +430,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         out = write_report(rows, HERE / "data" / args.report)
         print(f"\nReport written to {out}")
     else:
-        print("\nNothing cleared the filters. Try --min-score 0.12 or more --pages.")
+        print("\nNothing cleared the filters. Try --strictness broad or more --pages.")
     return 0
 
 
@@ -667,10 +673,15 @@ def add_shared_arguments(sub: argparse.ArgumentParser) -> None:
         help="preferred city or state; repeatable. Remote postings always pass.",
     )
     sub.add_argument(
+        "--strictness",
+        choices=sorted(matcher.STRICTNESS),
+        help="how picky matching is: broad (15%%), balanced (25%%, default) or strict (40%%)",
+    )
+    sub.add_argument(
         "--min-score",
         type=float,
         dest="min_score",
-        help="match threshold from 0 to 1 (default 0.22)",
+        help="exact match threshold from 0 to 1; overrides --strictness",
     )
     sub.add_argument(
         "--pages", type=int, help="search result pages to read per query (default 4)"

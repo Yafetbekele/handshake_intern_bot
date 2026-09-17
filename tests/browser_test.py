@@ -97,20 +97,19 @@ try:
             print("=" * 70)
             print("4. FILTERS AND SCORING ON LIVE PAGES")
             print("=" * 70)
-            profile = resume_parser.extract(Path(__file__).with_name("sample_resume.txt"))
             cs = majors.resolve("Computer Science")
-            weights = matcher.build_weights(profile, cs.keywords, [])
 
             vet = session.load_job("1003")
             senior = session.load_job("1004")
 
-            swe_score = matcher.score_job(job.search_text, weights)
-            vet_score = matcher.score_job(vet.search_text, weights)
-            print(f"  SWE intern     {swe_score.percent}%")
+            swe_score = matcher.score_posting(job.title, job.description, cs)
+            vet_score = matcher.score_posting(vet.title, vet.description, cs)
+            print(f"  SWE intern     {swe_score.percent}%  {swe_score.reasons}")
             print(f"  vet intern     {vet_score.percent}%")
+            balanced = matcher.STRICTNESS["balanced"]
             check("SWE outranks vet posting", swe_score.score > vet_score.score)
-            check("SWE clears threshold", swe_score.score >= 0.22, f"{swe_score.percent}%")
-            check("vet fails threshold", vet_score.score < 0.22, f"{vet_score.percent}%")
+            check("SWE clears the balanced cutoff", matcher.passes(swe_score, balanced), f"{swe_score.percent}%")
+            check("vet fails the balanced cutoff", not matcher.passes(vet_score, balanced), f"{vet_score.percent}%")
             check(
                 "full-time role rejected",
                 not matcher.is_internship(senior.title, senior.description),
