@@ -30,6 +30,7 @@ check page.
 from __future__ import annotations
 
 import html
+import json
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -180,6 +181,74 @@ JOBS: dict[str, dict[str, str]] = {
             {"type": "text", "label": "Social Security Number", "required": True},
         ],
     },
+    # Psychology jobs for the jobs-mode and location-range tests. "metro" and
+    # "miles" say where each one is, for Handshake's location filter.
+    "3001": {
+        "title": "Behavioral Health Technician",
+        "employer": "Sheppard Pratt",
+        "where": "Onsite, based in Baltimore, MD",
+        "dates": "Full-time",
+        "kind": "Job",
+        "metro": "baltimore",
+        "miles": 4,
+        "body": (
+            "Provide direct care to clients in a residential behavioral health program. "
+            "Crisis intervention, de-escalation, documentation and case notes."
+        ),
+        "more": "",
+        "button": "Apply",
+    },
+    "3002": {
+        "title": "Case Manager",
+        "employer": "Baltimore Family Services",
+        "where": "Onsite, based in Towson, MD",
+        "dates": "Part-time",
+        "kind": "Job",
+        "metro": "baltimore",
+        "miles": 9,
+        "body": (
+            "Coordinate human services for families, maintain a caseload, community "
+            "outreach and mental health referrals."
+        ),
+        "more": "",
+        "button": "Apply externally",
+    },
+    "3003": {
+        "title": "Psychology Research Assistant",
+        "employer": "Pacific Mind Lab",
+        "where": "Onsite, based in Los Angeles, CA",
+        "dates": "Full-time",
+        "kind": "Job",
+        "metro": "los angeles",
+        "miles": 2,
+        "body": "Run participants through cognitive experiments, data collection and IRB paperwork.",
+        "more": "",
+        "button": "Apply",
+    },
+    "3004": {
+        "title": "Psychology Intern",
+        "employer": "Chesapeake Counseling",
+        "where": "Onsite, based in Baltimore, MD",
+        "dates": "Full-time" + chr(8729) + "From June 1, 2027 to August 15, 2027",
+        "kind": "Internship",
+        "metro": "baltimore",
+        "miles": 3,
+        "body": "Summer internship supporting counselors with intake and group sessions.",
+        "more": "",
+        "button": "Apply",
+    },
+    "3005": {
+        "title": "Mental Health Associate",
+        "employer": "Harford Recovery",
+        "where": "Onsite, based in Bel Air, MD",
+        "dates": "Full-time",
+        "kind": "Job",
+        "metro": "baltimore",
+        "miles": 30,
+        "body": "Support recovery programs, patient care and group therapy for adults.",
+        "more": "",
+        "button": "Apply",
+    },
 }
 
 ALL_IDS = sorted(JOBS)
@@ -198,6 +267,14 @@ PAGE = """<!doctype html><html><head><title>Jobs | Handshake</title></head><body
     <input type="search" name="query" role="combobox" placeholder="Describe a job you want" value="{query_value}" />
     <label><input type="checkbox" aria-label="Internship" /> Internship</label>
   </form>
+  <!-- Handshake keeps the sort menu's options in the page while closed. -->
+  <div role="listbox" id="sort-list" style="display:none"><div role="option">Most relevant</div><div role="option">Newest jobs</div></div>
+  <button type="button" id="loc-pill" aria-haspopup="dialog" onclick="toggleLocation()">Location</button>
+  <div id="loc-pop" role="dialog" aria-label="Location" data-hook="filter-pill|locationFilter" style="display:none">
+    <input id="loc-input" type="search" role="combobox" aria-label="Location" aria-controls="loc-list" placeholder="Search by city, state, or zip code" />
+    <div role="listbox" id="loc-list"></div>
+    <label>Search radius for locations: 50 miles <input type="range" min="1" max="100" value="50" /></label>
+  </div>
   <div id="results" style="max-height:400px; overflow-y:auto">{cards}</div>
   {pager}
   <div data-hook="right-content">{panel}</div>
@@ -234,6 +311,36 @@ document.querySelector("input[name='query']").addEventListener('keydown', functi
   }}
 }});
 window.picked = {{ resume: 'Academic Resume.pdf' }};
+var PLACES = [
+  {{id: 'place.1', label: 'Baltimore, Maryland, United States', point: '39.28,-76.61', text: 'Baltimore'}},
+  {{id: 'place.2', label: 'Baltimore Highlands, Maryland, United States', point: '39.23,-76.63', text: 'Baltimore Highlands'}},
+  {{id: 'place.3', label: 'Los Angeles, California, United States', point: '34.05,-118.24', text: 'Los Angeles'}}
+];
+function toggleLocation() {{
+  var pop = document.getElementById('loc-pop');
+  pop.style.display = pop.style.display === 'none' ? 'block' : 'none';
+}}
+document.getElementById('loc-input').addEventListener('input', function () {{
+  var typed = this.value.toLowerCase();
+  setTimeout(function () {{
+    var list = document.getElementById('loc-list');
+    list.innerHTML = '';
+    if (typed.length < 3) return;
+    PLACES.filter(function (place) {{ return place.label.toLowerCase().indexOf(typed) !== -1; }}).forEach(function (place) {{
+      var option = document.createElement('div');
+      option.setAttribute('role', 'option');
+      option.textContent = place.label;
+      option.addEventListener('click', function () {{ choosePlace(place); }});
+      list.appendChild(option);
+    }});
+  }}, 300);
+}});
+function choosePlace(place) {{
+  var params = new URLSearchParams(location.search);
+  params.set('locationFilter', JSON.stringify({{id: place.id, label: place.label, type: 'place', point: place.point, text: place.text, distance: '50mi'}}));
+  params.set('page', '1');
+  location.href = location.pathname + '?' + params.toString();
+}}
 function openDialog() {{
   document.getElementById('dialog').style.display = 'block';
 }}
@@ -281,12 +388,30 @@ function submitApp() {{
 </body></html>"""
 
 
-def result_cards(query_string: str) -> str:
+def visible_ids(params: dict[str, list[str]]) -> list[str]:
+    """Apply Handshake's filters the way the real site does, from the address:
+    jobType 3 is internships, 9 is jobs; locationFilter holds a place and distance."""
+    ids = list(ALL_IDS)
+    types = params.get("jobType", [])
+    if "3" in types and "9" not in types:
+        ids = [i for i in ids if JOBS[i]["kind"] == "Internship"]
+    elif "9" in types and "3" not in types:
+        ids = [i for i in ids if JOBS[i]["kind"] == "Job"]
+    raw = params.get("locationFilter", [""])[0]
+    if raw:
+        place = json.loads(raw)
+        metro = str(place.get("text", "")).lower()
+        miles = float(str(place.get("distance", "50mi")).rstrip("mi") or 50)
+        ids = [i for i in ids if JOBS[i].get("metro") == metro and JOBS[i].get("miles", 999) <= miles]
+    return ids
+
+
+def result_cards(query_string: str, ids: list[str] | None = None) -> str:
     """Cards shaped like Handshake's. Job 1003's card carries a 'You applied'
     badge, which must never leak into another job's details."""
     suffix = f"?{query_string}" if query_string else ""
     cards = []
-    for job_id in ALL_IDS:
+    for job_id in (ALL_IDS if ids is None else ids):
         data = JOBS[job_id]
         badge = "<span>You applied</span>" if job_id == "1003" else ""
         label = html.escape(f"{data['employer']} {data['title']} {data['kind']}", quote=True)
@@ -411,7 +536,7 @@ class Handler(BaseHTTPRequestHandler):
             if flat.get("style") == "buttons":
                 cards = button_cards()
             else:
-                cards = result_cards(query_string)
+                cards = result_cards(urlencode(params, doseq=True), visible_ids(params))
                 next_params = dict(flat, page="2")
                 pager = (
                     "<button aria-label='first page' disabled></button>"

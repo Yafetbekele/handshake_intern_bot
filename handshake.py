@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qsl, quote_plus, urlparse
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 PLAYWRIGHT_HINT = (
     "Playwright is not installed. From the project folder run:\n"
@@ -62,6 +62,13 @@ SEARCH_NOT_FOUND_MESSAGE = (
     "as search_url_template in config.json with {{query}} and {{page}} in place of\n"
     "the search words and page number. See 'When it breaks' in the README."
 )
+
+LOCATION_FILTER_MESSAGE = (
+    "\nCould not set Handshake's location filter to '{near}': {detail}.\n"
+    "Stopping so nothing is applied to outside your area. Try a different city\n"
+    "spelling or a ZIP code, or leave the city blank to search everywhere."
+)
+
 
 SEARCH_MOVED_MESSAGE = (
     "\nHandshake redirected the job search from {wanted} to {actual}.\n"
@@ -244,6 +251,80 @@ def same_search_page(wanted: str, actual: str) -> bool:
     if actual == wanted:
         return True
     return re.fullmatch(re.escape(wanted) + r"/\d+", actual) is not None
+
+
+JOB_TYPE_PARAMS = {
+    # Handshake's own filter values, read from the live site.
+    "internships": [("jobType", "3")],
+    "jobs": [("jobType", "9"), ("employmentTypes", "1"), ("employmentTypes", "2")],
+}
+
+
+def filtered_search_url(url: str, looking_for: str, miles: int | None) -> str:
+    """Return a search address with the job type set and, if given, the distance.
+
+    The location itself must already be in the address (picked in the page);
+    only its distance is changed here, to the "25mi" form Handshake uses.
+    """
+    import json as _json
+
+    parsed = urlparse(url)
+    pairs = [
+        (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if k not in {"jobType", "employmentTypes"}
+    ]
+    if miles is not None:
+        updated = []
+        for key, value in pairs:
+            if key == "locationFilter":
+                try:
+                    data = _json.loads(value)
+                    data["distance"] = f"{int(miles)}mi"
+                    value = _json.dumps(data, separators=(",", ":"))
+                except (ValueError, TypeError):
+                    pass
+            updated.append((key, value))
+        pairs = updated
+    pairs += JOB_TYPE_PARAMS.get(looking_for, [])
+    return urlunparse(parsed._replace(query=urlencode(pairs)))
+
+
+US_STATES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+    "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois",
+    "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
+    "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota",
+    "MS": "Mississippi", "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon",
+    "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
+    "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia",
+    "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+}
+
+
+def place_state(near: str) -> str:
+    """The state named after the comma in "Baltimore, MD", spelled out."""
+    parts = [part.strip() for part in near.split(",")[1:] if part.strip()]
+    if not parts:
+        return ""
+    state = parts[0]
+    return US_STATES.get(state.upper(), state)
+
+
+def location_label(url: str) -> str:
+    """The place and distance a search address is filtered to, if any."""
+    import json as _json
+
+    for key, value in parse_qsl(urlparse(url).query, keep_blank_values=True):
+        if key == "locationFilter":
+            try:
+                data = _json.loads(value)
+            except (ValueError, TypeError):
+                return ""
+            return str(data.get("label") or data.get("text") or "")
+    return ""
 
 
 LOCATION_LINE_RE = re.compile(
@@ -669,10 +750,177 @@ class HandshakeSession:
             except Exception as exc:
                 visited.append(f"{path} (typing failed: {type(exc).__name__})")
                 continue
+            self._apply_search_filters()
             self._learn_template(query)
             return True
 
         raise SystemExit(SEARCH_NOT_FOUND_MESSAGE.format(tried="\n  ".join(visited)))
+
+    # ------------------------------------------------------------ search filters
+
+    def _apply_search_filters(self) -> None:
+        """Apply Handshake's own job type and location filters to the current search.
+
+        Handshake keeps both in the address (checked on the live site):
+        internships are jobType=3; jobs are jobType=9 with employmentTypes=1
+        (full-time) and 2 (part time); location is a locationFilter value holding
+        Handshake's own place and a distance such as "25mi". The place has to
+        come from Handshake's city suggestions, so it is picked in the page; the
+        rest is written into the address. The search address learned afterwards
+        keeps all of it for every later search and page.
+        """
+        assert self.page is not None
+        looking_for = str(self.config.get("looking_for", "internships")).lower()
+        near = str(self.config.get("near_location") or "").strip()
+        miles = max(1, min(100, int(self.config.get("within_miles") or 25)))
+
+        if near:
+            ok, detail = self._pick_location(near)
+            if not ok:
+                raise SystemExit(LOCATION_FILTER_MESSAGE.format(near=near, detail=detail))
+
+        if looking_for == "jobs" or near:
+            adjusted = filtered_search_url(self.page.url, looking_for, miles if near else None)
+            if adjusted != self.page.url:
+                try:
+                    self.page.goto(adjusted, wait_until="domcontentloaded")
+                except PlaywrightTimeout:
+                    pass
+                self._settle(2000)
+                self.stop_if_security_check()
+
+        if near:
+            place = location_label(self.page.url)
+            if not place:
+                raise SystemExit(LOCATION_FILTER_MESSAGE.format(
+                    near=near, detail="Handshake did not keep the location in the search"))
+            print(f"    location filter: within {miles} miles of {place}")
+        if looking_for == "jobs":
+            print("    job type filter: full-time and part-time jobs")
+
+    def _visible(self, locator: Locator) -> Locator | None:
+        try:
+            for index in range(min(locator.count(), 6)):
+                if locator.nth(index).is_visible():
+                    return locator.nth(index)
+        except Exception:
+            pass
+        return None
+
+    def _suggestions_for(self, box: Locator) -> Locator:
+        """The options of the list this box controls, not every option on the page.
+
+        Handshake keeps other dropdowns (sort order, saved searches) in the page,
+        so reading every option picked "Most relevant" instead of a city.
+        """
+        assert self.page is not None
+        try:
+            controls = (box.get_attribute("aria-controls") or "").split()
+        except Exception:
+            controls = []
+        if controls:
+            selector = ", ".join(f'[id="{c}"] [role=option]' for c in controls)
+            return self.page.locator(selector)
+        return self.page.locator("[role=listbox]:visible [role=option]")
+
+    @staticmethod
+    def _visible_texts(options: Locator) -> list[tuple[int, str]]:
+        found: list[tuple[int, str]] = []
+        try:
+            for index in range(min(options.count(), 20)):
+                option = options.nth(index)
+                if option.is_visible():
+                    text = " ".join(option.inner_text().split())
+                    if text:
+                        found.append((index, text))
+        except Exception:
+            pass
+        return found
+
+    def _choose_suggestion(
+        self, options: Locator, city: str, state: str, wait_seconds: float
+    ) -> tuple[int, str] | None:
+        """Wait for suggestions and pick the city, in the right state when one was given."""
+        assert self.page is not None
+        wanted = city.lower()
+        deadline = time.time() + wait_seconds
+        while time.time() < deadline:
+            texts = self._visible_texts(options)
+            starts = [(i, t) for i, t in texts if wanted and t.lower().startswith(wanted)]
+            if state:
+                in_state = [(i, t) for i, t in starts if re.search(rf"{re.escape(state)}", t, re.I)]
+                if in_state:
+                    return in_state[0]
+            elif starts:
+                return starts[0]
+            if texts and time.time() > deadline - 3:
+                return starts[0] if starts else None
+            self.page.wait_for_timeout(300)
+        return None
+
+    def _pick_location(self, near: str) -> tuple[bool, str]:
+        """Open Handshake's Location filter, type the city and pick its suggestion."""
+        assert self.page is not None
+        page = self.page
+        location_name = re.compile(r"^\s*location\b", re.IGNORECASE)
+
+        box = self._visible(page.get_by_role("combobox", name=location_name))
+        if box is None:
+            opener = self._visible(page.get_by_role("button", name=location_name))
+            if opener is None:
+                return False, "the Location filter button was not found"
+            try:
+                opener.click()
+                page.wait_for_timeout(1000)
+            except Exception as exc:
+                return False, f"opening the Location filter failed ({type(exc).__name__})"
+            box = self._visible(page.get_by_role("combobox", name=location_name))
+        if box is None:
+            box = self._visible(page.locator("input[placeholder*='city' i]"))
+        if box is None:
+            return False, "the Location search box was not found"
+
+        options = self._suggestions_for(box)
+        city = near.split(",")[0].strip()
+        state = place_state(near)
+        # Handshake's place search often finds nothing for "Baltimore, MD" but
+        # does for "Baltimore", so fall back to the city alone.
+        attempts = [near] if city.lower() == near.strip().lower() else [near, city]
+        choice: tuple[int, str] | None = None
+        for attempt, typed in enumerate(attempts):
+            try:
+                box.click()
+                box.fill("")
+                box.press_sequentially(typed, delay=40)
+            except Exception as exc:
+                return False, f"typing the city failed ({type(exc).__name__})"
+            last_try = attempt == len(attempts) - 1
+            choice = self._choose_suggestion(options, city, state, wait_seconds=12 if last_try else 6)
+            if choice is not None:
+                break
+        if choice is None:
+            return False, "Handshake suggested no places for it"
+
+        try:
+            options.nth(choice[0]).click()
+        except Exception as exc:
+            return False, f"choosing '{choice[1]}' failed ({type(exc).__name__})"
+        page.wait_for_timeout(1500)
+        if not location_label(page.url):
+            # Some filter panels only update the search after pressing Apply.
+            apply_button = self._visible(page.locator("[role=dialog]").get_by_role("button", name=re.compile(r"^\s*apply\s*$", re.I)))
+            if apply_button is not None:
+                try:
+                    apply_button.click()
+                except Exception:
+                    pass
+        self._settle(2000)
+        self.stop_if_security_check()
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return True, choice[1]
 
     def _query_in_address(self, query: str) -> bool:
         assert self.page is not None
@@ -720,8 +968,9 @@ class HandshakeSession:
                 parts.append(f"{safe_key}={safe_value}")
         if not has_page:
             parts.append("page={page}")
-        # Handshake's Internship filter. Harmless where it isn't understood.
-        if self.config.get("internship_only", True) and not any(k == "jobType" for k, _ in pairs):
+        # Handshake's Internship filter, in case the checkbox click didn't stick.
+        internships = str(self.config.get("looking_for", "internships")).lower() == "internships"
+        if internships and self.config.get("internship_only", True) and not any(k == "jobType" for k, _ in pairs):
             parts.append("jobType=3")
 
         # Drop the auto-selected job number: /job-search/11428461 -> /job-search

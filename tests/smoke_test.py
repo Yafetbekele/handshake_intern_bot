@@ -141,6 +141,35 @@ assert matcher.score_posting("Intern", "We embedded our team in the field.", ce)
 assert "rtl" not in matcher.score_posting("Intern", "Ask about our portal.", ce).matched
 print("  OK (terms match whole words only)")
 
+ps = majors.resolve("Psychology")
+job_queries = majors.queries_for(ps, "jobs")
+assert "psychology" in job_queries and not any("intern" in q for q in job_queries), job_queries
+assert all("intern" in q for q in majors.queries_for(ps, "internships"))
+derived = majors.queries_for(majors.resolve("Computer Engineering"), "jobs")
+assert "computer engineering" in derived and not any("intern" in q for q in derived), derived
+print(f"  OK (job searches: {', '.join(job_queries[:4])} ...)")
+
+psych_cases = [
+    ("Behavioral Health Technician", "Direct care for clients, crisis de-escalation.", True),
+    ("Case Manager", "Caseload, case notes, human services for families.", True),
+    ("Youth Development Specialist", "Mentoring for children after school.", True),
+    ("Software Engineer", "Backend services in Java.", False),
+]
+for title, text, expected in psych_cases:
+    result = matcher.score_posting(title, text, ps)
+    assert matcher.passes(result, matcher.STRICTNESS["broad"]) == expected, (title, result.percent)
+print("  OK (the Psychology preset takes most psychology-related jobs on broad)")
+
+from handshake import place_state
+assert place_state("Baltimore, MD") == "Maryland"
+assert place_state("Austin, Texas") == "Texas"
+assert place_state("Baltimore") == ""
+assert matcher.is_internship_posting("Psychology Intern", "")
+assert matcher.is_internship_posting("Research Assistant", "At a glance\nInternship\nFull-time")
+assert not matcher.is_internship_posting("Registered Behavior Technician", "Job\nFull-time\nOur internship program trains new staff.")
+assert not matcher.is_internship_posting("Internal Communications Specialist", "")
+print("  OK (jobs mode tells internships from jobs)")
+
 print()
 print("=" * 70)
 print("4. FILTERS")

@@ -33,6 +33,7 @@ class MajorProfile:
     core: list[str] = field(default_factory=list)
     related: list[str] = field(default_factory=list)
     title_words: list[str] = field(default_factory=list)
+    job_queries: list[str] = field(default_factory=list)
 
     @property
     def keywords(self) -> list[str]:
@@ -56,9 +57,27 @@ def load_majors(path: Path = MAJORS_FILE) -> list[MajorProfile]:
                 core=[str(t) for t in raw.get("core", [])],
                 related=[str(t) for t in raw.get("related", [])],
                 title_words=[str(t) for t in raw.get("title_words", [])],
+                job_queries=[str(q) for q in raw.get("job_queries", [])],
             )
         )
     return majors
+
+
+INTERN_WORDS = re.compile(r"\b(summer\s+)?(intern|interns|internship|internships|co-?op)\b", re.IGNORECASE)
+
+
+def queries_for(major: MajorProfile, looking_for: str) -> list[str]:
+    """Searches to run: the internship ones, or job ones for job searches.
+
+    A major without its own job searches uses its internship searches with
+    "intern" taken out, so "psychology intern" becomes "psychology".
+    """
+    if looking_for != "jobs":
+        return list(major.queries) or [f"{major.name} intern"]
+    if major.job_queries:
+        return list(major.job_queries)
+    stripped = [" ".join(INTERN_WORDS.sub(" ", q).split()) for q in major.queries]
+    return list(dict.fromkeys(q for q in stripped if q)) or [major.name.lower()]
 
 
 MAJORS: list[MajorProfile] = load_majors()

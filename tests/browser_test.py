@@ -19,7 +19,7 @@ import majors
 import matcher
 import resume_parser
 from fake_handshake import JOBS, serve
-from handshake import Documents, HandshakeSession, classify_document_label
+from handshake import Documents, HandshakeSession, classify_document_label, location_label
 
 PORT = 8765
 BASE = f"http://127.0.0.1:{PORT}"
@@ -268,7 +268,9 @@ try:
             check("learned address pages", "{page}" in session._learned_template)
 
             ids_again = session.collect_job_ids(["backend intern"], max_pages=2)
-            check("second search reuses the learned address", len(ids_again) == len(JOBS), str(ids_again))
+            internship_ids = sorted(i for i, d in JOBS.items() if d["kind"] == "Internship")
+            check("second search reuses the learned address, internships only",
+                  sorted(ids_again) == internship_ids, str(ids_again))
             check("reuse went through the address, not the box", "query=backend" in session.page.url.replace("+", "%20").replace("%20", "+") or "backend" in session.page.url)
 
             print()
@@ -427,6 +429,44 @@ try:
             check("restored internship stays visible", page.locator("tr[data-id='9001']").is_visible())
             check("count back to all shown", page.locator("#count").inner_text() == "3 shown",
                   page.locator("#count").inner_text())
+
+            print()
+            print("=" * 70)
+            print("23. JOBS WITHIN A DISTANCE OF A CITY, USING HANDSHAKE'S FILTERS")
+            print("=" * 70)
+            session.config.update({
+                "search_url_template": "",
+                "looking_for": "jobs",
+                "near_location": "Baltimore, MD",
+                "within_miles": 25,
+            })
+            session._learned_template = ""
+            ids = session.collect_job_ids(["psychology"], max_pages=1)
+            print(f"  ids: {ids}")
+            print(f"  learned: {session._learned_template}")
+            check("only jobs within 25 miles of Baltimore", sorted(ids) == ["3001", "3002"], str(ids))
+            check("Handshake's place was picked", "Baltimore" in (location_label(session.page.url) or ""),
+                  location_label(session.page.url))
+            check("distance set to 25 miles", "25mi" in session.page.url.replace("%22", '"'), session.page.url)
+            check("job type set to full-time and part-time jobs",
+                  "jobType=9" in session._learned_template and "employmentTypes=2" in session._learned_template)
+            check("learned address keeps the location", "locationFilter=" in session._learned_template)
+            again = session.collect_job_ids(["case manager"], max_pages=1)
+            check("later searches keep the filters", sorted(again) == ["3001", "3002"], str(again))
+
+            session.config["within_miles"] = 50
+            session._learned_template = ""
+            wider = session.collect_job_ids(["psychology"], max_pages=1)
+            check("a wider distance reaches farther jobs", "3005" in wider and "3003" not in wider, str(wider))
+
+            session.config["near_location"] = "Atlantis"
+            session._learned_template = ""
+            try:
+                session.collect_job_ids(["psychology"], max_pages=1)
+                check("unknown city stops the run", False, "no stop")
+            except SystemExit as exc:
+                check("unknown city stops the run", "location filter" in str(exc.code), str(exc.code)[:80])
+            session.config.update({"looking_for": "internships", "near_location": "", "search_url_template": original_template})
 finally:
     server.shutdown()
 

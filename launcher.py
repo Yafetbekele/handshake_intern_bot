@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 HERE = Path(__file__).resolve().parent
-DATA = HERE / "data"
+DATA = Path(os.environ.get("HSBOT_DATA_DIR") or HERE / "data")
 SETTINGS_PATH = DATA / "launcher_settings.json"
 SETUP_MARKER = DATA / ".setup_complete"
 
@@ -50,6 +50,9 @@ class LaunchSettings:
     base_url: str = ""
     tailor_resume: bool = False
     strictness: str = "balanced"
+    looking_for: str = "internships"
+    near: str = ""
+    within_miles: int = 25
 
 
 # ------------------------------------------------------------------ settings
@@ -72,6 +75,13 @@ def load_settings(path: Path = SETTINGS_PATH) -> LaunchSettings:
         settings.max_applications = int(settings.max_applications)
     except (TypeError, ValueError):
         settings.max_applications = 10
+    if settings.looking_for not in {"internships", "jobs"}:
+        settings.looking_for = "internships"
+    try:
+        settings.within_miles = max(1, min(100, int(settings.within_miles)))
+    except (TypeError, ValueError):
+        settings.within_miles = 25
+    settings.near = str(settings.near or "")
     return settings
 
 
@@ -100,6 +110,15 @@ def validate(settings: LaunchSettings) -> list[str]:
         problems.append("Choose what the assistant should do.")
     if settings.strictness not in STRICTNESS_KEYS:
         problems.append("Choose how picky matching should be.")
+    if settings.looking_for not in {"internships", "jobs"}:
+        problems.append("Choose whether to look for internships or jobs.")
+    if settings.near.strip():
+        try:
+            miles_ok = 1 <= int(settings.within_miles) <= 100
+        except (TypeError, ValueError):
+            miles_ok = False
+        if not miles_ok:
+            problems.append("Distance must be between 1 and 100 miles.")
 
     for label, value in (("cover letter", settings.cover_letter), ("transcript", settings.transcript)):
         if value.strip() and not Path(value).expanduser().is_file():
@@ -113,6 +132,13 @@ def validate(settings: LaunchSettings) -> list[str]:
     if url and not url.lower().startswith(("http://", "https://")):
         problems.append("The school Handshake address must start with https://")
     return problems
+
+
+def safe_int(value: object, default: int) -> int:
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
 
 
 def build_args(settings: LaunchSettings) -> list[str]:
@@ -134,6 +160,13 @@ def build_args(settings: LaunchSettings) -> list[str]:
         args.append("--tailor-resume")
     if settings.strictness in STRICTNESS_KEYS:
         args += ["--strictness", settings.strictness]
+    if settings.looking_for == "jobs":
+        args += ["--looking-for", "jobs"]
+    if settings.near.strip():
+        args += ["--near", settings.near.strip(), "--within", str(int(settings.within_miles))]
+    elif settings.looking_for == "jobs":
+        # Blank city means anywhere; say so, so the run doesn't stop to ask.
+        args += ["--near", ""]
 
     if command == "apply":
         args += ["--max", str(int(settings.max_applications))]
@@ -302,8 +335,27 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
         width=36,
     ).grid(row=0, column=1, padx=6)
 
+    looking_box = ttk.LabelFrame(frame, text="Looking for", padding=10)
+    looking_box.grid(row=5, column=0, columnspan=3, sticky="ew", pady=6)
+    looking_var = tk.StringVar(value=initial.looking_for)
+    ttk.Radiobutton(looking_box, text="Internships", value="internships", variable=looking_var).grid(row=0, column=0, sticky="w")
+    ttk.Radiobutton(looking_box, text="Jobs (full-time and part-time)", value="jobs", variable=looking_var).grid(
+        row=0, column=1, sticky="w", padx=(12, 0)
+    )
+    near_var = tk.StringVar(value=initial.near)
+    within_var = tk.StringVar(value=str(initial.within_miles))
+    where_row = ttk.Frame(looking_box)
+    where_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    ttk.Label(where_row, text="Near city or ZIP:").grid(row=0, column=0, sticky="w")
+    ttk.Entry(where_row, textvariable=near_var, width=24).grid(row=0, column=1, padx=6)
+    ttk.Label(where_row, text="within").grid(row=0, column=2)
+    ttk.Spinbox(where_row, from_=1, to=100, textvariable=within_var, width=5).grid(row=0, column=3, padx=6)
+    ttk.Label(where_row, text="miles").grid(row=0, column=4, sticky="w")
+    ttk.Label(looking_box, text="Leave the city blank to search everywhere. Uses Handshake's own location filter.",
+              foreground="#666").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
     optional = ttk.LabelFrame(frame, text="Optional", padding=10)
-    optional.grid(row=5, column=0, columnspan=3, sticky="ew", pady=6)
+    optional.grid(row=6, column=0, columnspan=3, sticky="ew", pady=6)
     optional.columnconfigure(1, weight=1)
 
     def optional_file(row: int, label: str, var: tk.StringVar, title: str) -> None:
@@ -340,6 +392,9 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
             base_url=base_url_var.get().strip(),
             tailor_resume=bool(tailor_var.get()),
             strictness=strict_keys.get(strict_var.get(), "balanced"),
+            looking_for=looking_var.get() if looking_var.get() in {"internships", "jobs"} else "internships",
+            near=near_var.get().strip(),
+            within_miles=safe_int(within_var.get(), 25),
         )
 
     def start() -> None:
@@ -364,7 +419,7 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
         root.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=6, column=0, columnspan=3, sticky="e", pady=(12, 0))
+    buttons.grid(row=7, column=0, columnspan=3, sticky="e", pady=(12, 0))
     ttk.Button(buttons, text="Cancel", command=root.destroy).grid(row=0, column=0, padx=6)
     start_button = ttk.Button(buttons, text="Start", command=start)
     start_button.grid(row=0, column=1)

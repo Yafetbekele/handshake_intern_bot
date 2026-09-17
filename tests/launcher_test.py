@@ -13,8 +13,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Keep the student's real "apply yourself" list untouched.
+# Keep the student's real "apply yourself" list and data folder untouched.
 os.environ["HSBOT_MANUAL_DIR"] = tempfile.mkdtemp(prefix="hsbot_manual_")
+TEMP_DATA = Path(tempfile.mkdtemp(prefix="hsbot_data_"))
+os.environ["HSBOT_DATA_DIR"] = str(TEMP_DATA)
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -65,6 +67,15 @@ broad_args = build_args(LaunchSettings(mode="confirm", strictness="broad", **bas
 check("broad pickiness passed through", broad_args[broad_args.index("--strictness") + 1] == "broad")
 check("unknown pickiness reported",
       any("picky" in p for p in validate(LaunchSettings(mode="search", strictness="whatever", **base))))
+check("internship searches by default", "--looking-for" not in args)
+jobs_args = build_args(LaunchSettings(mode="confirm", looking_for="jobs", near="Baltimore, MD", within_miles=15, **base))
+check("jobs choice passed through", jobs_args[jobs_args.index("--looking-for") + 1] == "jobs")
+check("city and distance passed through",
+      jobs_args[jobs_args.index("--near") + 1] == "Baltimore, MD" and jobs_args[jobs_args.index("--within") + 1] == "15")
+anywhere = build_args(LaunchSettings(mode="search", looking_for="jobs", **base))
+check("blank city means anywhere, without asking again", anywhere[anywhere.index("--near") + 1] == "")
+check("distance out of range reported",
+      any("miles" in p for p in validate(LaunchSettings(mode="search", near="Baltimore", within_miles=0, **base))))
 check("tailoring works for the matches-only mode too",
       "--tailor-resume" in build_args(LaunchSettings(mode="search", tailor_resume=True, **base)))
 
@@ -142,12 +153,10 @@ print("=" * 70)
 from fake_handshake import serve
 
 PORT = 8767
-DATA = ROOT / "data"
-BACKUP = ROOT / "data_backup_during_launcher_test"
-if DATA.exists():
-    if BACKUP.exists():
-        shutil.rmtree(BACKUP)
-    DATA.rename(BACKUP)
+DATA = TEMP_DATA
+import main as _main  # noqa: E402
+
+assert _main.DATA_DIR == DATA and launcher.DATA == DATA, "the test must never run against the real data folder"
 
 server, _thread = serve(PORT)
 calls: list[tuple[str, float]] = []
@@ -181,9 +190,7 @@ try:
         check("cancel exits cleanly without running", cancelled == 0 and len(calls) == 1)
 finally:
     server.shutdown()
-    shutil.rmtree(DATA, ignore_errors=True)
-    if BACKUP.exists():
-        BACKUP.rename(DATA)
+    shutil.rmtree(DATA, ignore_errors=True)  # the temporary folder, never the real one
 
 print()
 print("=" * 70)

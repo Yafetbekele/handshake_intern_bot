@@ -104,6 +104,41 @@ To skip the prompt:
 python main.py search --resume resume.pdf --major "Mechanical Engineering"
 ```
 
+## Jobs instead of internships, near a city
+
+In the launcher, choose **Jobs (full-time and part-time)** under Looking for.
+Then type a city or ZIP code and a distance from 1 to 100 miles. Leave the city
+blank to search everywhere. On the command line:
+
+```bash
+python main.py search --resume resume.pdf --major Psychology --looking-for jobs --near "Baltimore, MD" --within 25
+```
+
+If you look for jobs without giving a city, the black window asks for one.
+
+How it works:
+- **The tool uses Handshake's own filters.** It ticks Full-time job and Part
+  time, and picks your city from Handshake's Location suggestions at the
+  distance you chose. Handshake decides which postings are in range. The tool
+  doesn't measure distances itself.
+- **Internships are skipped, and dates don't matter.** The summer check only
+  applies when you're looking for internships.
+- **If Handshake can't find your city, the run stops,** rather than applying
+  to jobs everywhere. Try another spelling or a ZIP code.
+- **Each major gets job searches.** Psychology has its own list: psychology,
+  behavioral health technician, registered behavior technician, mental health,
+  case manager, research assistant, human services, social services, counselor,
+  psychiatric technician, youth development, and applied behavior analysis.
+  Other majors reuse their internship searches with "intern" taken out.
+- **The Psychology preset is broad on purpose.** It covers behavioral health,
+  counseling, case management, ABA and RBT work, crisis and recovery programs,
+  research assistant roles, youth and family services, and human services. Use
+  the Broad setting to catch nearby roles too.
+
+Everything else works the same for jobs: tailored resumes, saved answers, and
+the apply-yourself list. Tailored resumes are built from your profile, so a
+psychology job search needs a profile with psychology experience in it.
+
 ## Apply
 
 Confirms each posting with you before submitting:

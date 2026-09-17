@@ -120,6 +120,19 @@ def _matches_any(text: str, patterns: list[str]) -> bool:
     return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
 
+def is_internship_posting(title: str, body: str = "") -> bool:
+    """For job searches: is this posting an internship rather than a job?
+
+    Only the title and Handshake's own job type line ("Internship" under At a
+    glance) count, since job descriptions often mention internships in passing.
+    """
+    if _matches_any(title, NEGATIVE_TITLE_PATTERNS):
+        return False
+    if _matches_any(title, INTERN_PATTERNS):
+        return True
+    return re.search(r"(?:^|\n)\s*internship\s*(?:\n|$)", body[:2500], re.IGNORECASE) is not None
+
+
 def is_internship(title: str, body: str = "") -> bool:
     if _matches_any(title, NEGATIVE_TITLE_PATTERNS):
         return False

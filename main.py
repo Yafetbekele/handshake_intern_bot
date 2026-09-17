@@ -35,6 +35,8 @@ from handshake import Documents, HandshakeSession, Job
 from storage import MANUAL_FOLDER_NAME, Ledger, ManualList, write_followups, write_report
 
 HERE = Path(__file__).resolve().parent
+# Tests point this somewhere temporary so they never touch the real data folder.
+DATA_DIR = Path(os.environ.get("HSBOT_DATA_DIR") or HERE / "data")
 
 
 def manual_list() -> ManualList:
@@ -177,6 +179,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_search_pages": 4,
     "delay_between_applications_seconds": [20, 45],
     "auto_submit": False,
+    "looking_for": "internships",
+    "near_location": "",
+    "within_miles": 25,
     "tailor_resume": False,
     "answer_questions": True,
     "use_ai_for_tailoring": True,
@@ -221,6 +226,13 @@ def load_config(args: argparse.Namespace) -> dict[str, Any]:
         if value is not None:
             config[key] = value
 
+    if getattr(args, "looking_for", None):
+        config["looking_for"] = args.looking_for
+    if getattr(args, "near", None) is not None:
+        config["near_location"] = args.near
+        config["location_chosen"] = True  # a blank --near means anywhere, on purpose
+    if getattr(args, "within", None) is not None:
+        config["within_miles"] = args.within
     if getattr(args, "tailor_resume", False):
         config["tailor_resume"] = True
     if getattr(args, "no_ai", False):
@@ -268,8 +280,11 @@ def gather_candidates(
     print(f"Postings that name the major ({', '.join(major.anchors[:2])}) nearly always pass.")
     print(f"Minimum match: {round(min_score * 100)}%")
 
-    queries = list(major.queries) or [f"{major.name} intern"]
-    banner(f"Searching Handshake for {major.name} internships")
+    jobs_mode = looking_for_jobs(config)
+    queries = majors.queries_for(major, "jobs" if jobs_mode else "internships")
+    near = str(config.get("near_location") or "").strip()
+    where = f" within {config.get('within_miles', 25)} miles of {near}" if near else ""
+    banner(f"Searching Handshake for {major.name} {'jobs' if jobs_mode else 'internships'}{where}")
     job_ids = session.collect_job_ids(queries, int(config.get("max_search_pages", 4)))
     print(f"\n{len(job_ids)} unique postings found across {len(queries)} searches.")
     if not job_ids:
@@ -298,12 +313,17 @@ def gather_candidates(
             print(f"{prefix} {job_id}: no title found, skipping")
             continue
 
-        if config.get("internship_only", True) and not matcher.is_internship(
+        if jobs_mode:
+            # Looking for jobs: internships are what gets skipped, and dates don't matter.
+            if matcher.is_internship_posting(job.title, job.description):
+                print(f"{prefix} skip (internship, looking for jobs): {job.title[:48]}")
+                continue
+        elif config.get("internship_only", True) and not matcher.is_internship(
             job.title, job.description
         ):
             print(f"{prefix} skip (not an internship): {job.title[:58]}")
             continue
-        if config.get("summer_only", True) and not matcher.is_summer(
+        if not jobs_mode and config.get("summer_only", True) and not matcher.is_summer(
             job.title, job.description, bool(config.get("include_undated_internships", True))
         ):
             print(f"{prefix} skip (not summer): {job.title[:58]}")
@@ -370,12 +390,43 @@ def resolve_inputs(
                 config[key] = ""
 
     major = majors.prompt_for_major(str(config.get("major", "")))
+    ask_for_location(config)
     return profile, major
+
+
+def looking_for_jobs(config: dict[str, Any]) -> bool:
+    return str(config.get("looking_for", "internships")).lower() == "jobs"
+
+
+def ask_for_location(config: dict[str, Any]) -> None:
+    """For job searches, ask for a city and a distance when none were given."""
+    if not looking_for_jobs(config) or config.get("location_chosen") or str(config.get("near_location") or "").strip():
+        return
+    if not (sys.stdin is not None and sys.stdin.isatty()):
+        return
+    print("\nWhere should the jobs be?")
+    try:
+        city = input("  City or ZIP code (Enter for anywhere): ").strip()
+        if not city:
+            print("  Searching everywhere.")
+            return
+        miles_text = input("  Within how many miles, 1 to 100 (Enter for 25): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    miles = 25
+    if miles_text:
+        try:
+            miles = max(1, min(100, int(float(miles_text))))
+        except ValueError:
+            print("  That isn't a number, using 25 miles.")
+    config["near_location"] = city
+    config["within_miles"] = miles
+    print(f"  Searching within {miles} miles of {city}.")
 
 
 def cmd_login(args: argparse.Namespace) -> int:
     config = load_config(args)
-    with HandshakeSession(config, load_selectors(), HERE / "data" / "browser_profile") as session:
+    with HandshakeSession(config, load_selectors(), DATA_DIR / "browser_profile") as session:
         ok = session.ensure_logged_in()
         if ok:
             print("Session stored. Later runs will reuse it.")
@@ -386,16 +437,16 @@ def cmd_login(args: argparse.Namespace) -> int:
 def cmd_search(args: argparse.Namespace) -> int:
     config = load_config(args)
     profile, major = resolve_inputs(config)
-    ledger = Ledger(HERE / "data" / "applied.json")
+    ledger = Ledger(DATA_DIR / "applied.json")
 
-    with HandshakeSession(config, load_selectors(), HERE / "data" / "browser_profile") as session:
+    with HandshakeSession(config, load_selectors(), DATA_DIR / "browser_profile") as session:
         if not session.ensure_logged_in():
             return 1
         kept = gather_candidates(
             session, config, profile, major, ledger, int(args.scan)
         )
 
-    banner(f"{len(kept)} matching summer internships, best first")
+    banner(f"{len(kept)} matching {'jobs' if looking_for_jobs(config) else 'summer internships'}, best first")
     rows = []
     for rank, (job, result) in enumerate(kept, start=1):
         print(f"{rank:3d}. {result.percent:3d}%  {job.label()}")
@@ -427,7 +478,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         print(f"\nInternships to apply to yourself ({len(manual)}): {page}")
 
     if rows:
-        out = write_report(rows, HERE / "data" / args.report)
+        out = write_report(rows, DATA_DIR / args.report)
         print(f"\nReport written to {out}")
     else:
         print("\nNothing cleared the filters. Try --strictness broad or more --pages.")
@@ -437,7 +488,7 @@ def cmd_search(args: argparse.Namespace) -> int:
 def cmd_apply(args: argparse.Namespace) -> int:
     config = load_config(args)
     profile, major = resolve_inputs(config)
-    ledger = Ledger(HERE / "data" / "applied.json")
+    ledger = Ledger(DATA_DIR / "applied.json")
     auto = bool(config.get("auto_submit", False))
     dry_run = bool(args.dry_run)
 
@@ -461,7 +512,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
     tailorer = ResumeTailor(config)
 
-    with HandshakeSession(config, load_selectors(), HERE / "data" / "browser_profile") as session:
+    with HandshakeSession(config, load_selectors(), DATA_DIR / "browser_profile") as session:
         if not session.ensure_logged_in():
             return 1
 
@@ -599,7 +650,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
     if followups:
         followups.sort(key=lambda row: -int(row["score_percent"]))
-        out = write_followups(followups, HERE / "data" / "follow_up.csv")
+        out = write_followups(followups, DATA_DIR / "follow_up.csv")
         banner(f"{len(followups)} good matches to finish by hand")
         for row in followups:
             print(f"  {row['score_percent']:3d}%  {row['title']} @ {row['employer']}")
@@ -625,8 +676,8 @@ def followup_row(job: Job, result: matcher.MatchResult, reason: str) -> dict[str
 
 
 def cmd_history(args: argparse.Namespace) -> int:
-    ledger = Ledger(HERE / "data" / "applied.json")
-    out = ledger.export_csv(HERE / "data" / args.out)
+    ledger = Ledger(DATA_DIR / "applied.json")
+    out = ledger.export_csv(DATA_DIR / args.out)
     print(f"{ledger.total_applied()} applications recorded.")
     print(f"Full history written to {out}")
     return 0
@@ -655,6 +706,21 @@ def add_shared_arguments(sub: argparse.ArgumentParser) -> None:
         help="local transcript uploaded when a posting requires one",
     )
     sub.add_argument("--major", help="skip the prompt and target this major")
+    sub.add_argument(
+        "--looking-for",
+        dest="looking_for",
+        choices=["internships", "jobs"],
+        help="internships (default), or full-time and part-time jobs",
+    )
+    sub.add_argument(
+        "--near",
+        help="city or ZIP code to search around, using Handshake's location filter",
+    )
+    sub.add_argument(
+        "--within",
+        type=int,
+        help="miles from --near, 1 to 100 (default 25)",
+    )
     sub.add_argument(
         "--tailor-resume",
         action="store_true",

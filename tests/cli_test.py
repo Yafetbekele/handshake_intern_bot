@@ -21,6 +21,10 @@ os.environ["HSBOT_MANUAL_DIR"] = str(MANUAL_DIR)
 TAILORED_DIR = MANUAL_DIR.parent / (MANUAL_DIR.name + "_tailored")
 os.environ["HSBOT_TAILORED_DIR"] = str(TAILORED_DIR)
 os.environ["HSBOT_PROFILE"] = str(Path(__file__).with_name("sample_profile.json"))
+# The run's ledger, reports and browser profile go to a temporary folder too,
+# so the student's real data folder is never moved, read or deleted.
+DATA = MANUAL_DIR.parent / (MANUAL_DIR.name + "_data")
+os.environ["HSBOT_DATA_DIR"] = str(DATA)
 _fake = Path(__file__).with_name("fake_claude.py")
 if os.name == "nt":
     _launcher = MANUAL_DIR.parent / (MANUAL_DIR.name + "_claude.cmd")
@@ -41,14 +45,7 @@ from fake_handshake import serve
 PORT = 8766
 BASE = f"http://127.0.0.1:{PORT}"
 RESUME = str(Path(__file__).with_name("sample_resume.txt"))
-DATA = ROOT / "data"
-
-# Keep any real ledger out of harm's way while the test runs.
-BACKUP = ROOT / "data_backup_during_test"
-if DATA.exists():
-    if BACKUP.exists():
-        shutil.rmtree(BACKUP)
-    DATA.rename(BACKUP)
+assert cli.DATA_DIR == DATA, "the test must never run against the real data folder"
 
 server, _thread = serve(PORT)
 print(f"Mock Handshake serving at {BASE}\n")
@@ -176,6 +173,35 @@ try:
 
     print()
     print("=" * 70)
+    print("JOBS WITHIN 25 MILES OF BALTIMORE (PSYCHOLOGY)")
+    print("=" * 70)
+    code = cli.main(
+        [
+            "search",
+            "--resume", RESUME,
+            "--major", "Psychology",
+            "--base-url", BASE,
+            "--looking-for", "jobs",
+            "--near", "Baltimore",
+            "--within", "25",
+            "--strictness", "broad",
+            "--pages", "1",
+            "--headless",
+            "--report", "psych_jobs.csv",
+        ]
+    )
+    check("jobs search exited cleanly", code == 0, f"exit={code}")
+    psych_report = DATA / "psych_jobs.csv"
+    psych_titles = [r["title"] for r in csv.DictReader(psych_report.open(encoding="utf-8"))] if psych_report.exists() else []
+    print(f"  kept: {psych_titles}")
+    check("nearby psychology jobs kept",
+          "Behavioral Health Technician" in psych_titles and "Case Manager" in psych_titles, str(psych_titles))
+    check("jobs outside the distance left out",
+          "Psychology Research Assistant" not in psych_titles and "Mental Health Associate" not in psych_titles)
+    check("internships left out when looking for jobs", "Psychology Intern" not in psych_titles)
+
+    print()
+    print("=" * 70)
     print("TAILORED RESUMES")
     print("=" * 70)
     made = sorted(p.parent.name for p in TAILORED_DIR.glob("*/Jane_Doe_Resume.pdf"))
@@ -193,10 +219,7 @@ finally:
     for leftover in MANUAL_DIR.parent.glob(MANUAL_DIR.name + "_claude*"):
         leftover.unlink(missing_ok=True)
     server.shutdown()
-    if DATA.exists():
-        shutil.rmtree(DATA, ignore_errors=True)
-    if BACKUP.exists():
-        BACKUP.rename(DATA)
+    shutil.rmtree(DATA, ignore_errors=True)  # the temporary folder, never the real one
 
 print()
 print("=" * 70)
