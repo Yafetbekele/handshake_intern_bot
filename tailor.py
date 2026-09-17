@@ -39,6 +39,7 @@ OUT_DIR = Path(os.environ.get("HSBOT_TAILORED_DIR") or HERE / "tailored_resumes"
 
 MAX_BULLETS = {"default": 3, "low": 2}
 MAX_SKILLS = 12
+MAX_COURSES = 6
 MAX_BULLET_CHARS = 170
 
 
@@ -144,7 +145,7 @@ def rule_plan(profile: dict[str, Any], job_text: str, title: str = "") -> Plan:
     ranked_courses = sorted(
         enumerate(courses), key=lambda p: (-_tag_score(p[1].get("tags", []), job_norm, job_tokens), p[0])
     )
-    coursework = [c["name"] for _, c in ranked_courses]
+    coursework = [c["name"] for _, c in ranked_courses][:MAX_COURSES]
 
     hs = earlier_education(profile)
     honors_ranked = sorted(
@@ -245,7 +246,7 @@ Absolute rules:
 def _ai_prompt(profile: dict[str, Any], job_text: str, title: str, employer: str) -> str:
     entries = profile_entries(profile)
     schema = {
-        "coursework": ["exact course names from the profile, most relevant first"],
+        "coursework": [f"up to {MAX_COURSES} exact course names from the profile, most relevant first"],
         "high_school_honors": ["0 to 2 exact honor names, only if they help"],
         "sections": [
             {
@@ -392,7 +393,7 @@ def _sanitize_ai_plan(
 
     umbc = primary_education(profile)
     hs = earlier_education(profile)
-    coursework = exact(data.get("coursework"), [c["name"] for c in umbc.get("coursework", [])]) or fallback.coursework
+    coursework = (exact(data.get("coursework"), [c["name"] for c in umbc.get("coursework", [])]) or fallback.coursework)[:MAX_COURSES]
     honors = exact(data.get("high_school_honors"), [h["name"] for h in hs.get("honors", [])])
     skills = exact(data.get("skills"), [s["name"] for s in profile.get("skills", [])])[:MAX_SKILLS] or fallback.skills
 
@@ -592,6 +593,9 @@ def render_pdf(profile: dict[str, Any], plan: Plan, path: str | Path) -> Path:
         indent = margin_x + 22
         text(indent, y, [("Times-Roman", f"Expected Graduation: {umbc['expected_graduation']} | GPA: {umbc['gpa']}")], size)
         y -= line
+        if umbc.get("honors_line"):
+            text(indent, y, [("Times-Italic", "Honors: "), ("Times-Roman", umbc["honors_line"])], size)
+            y -= line
         label = "Relevant Coursework: "
         label_w = stringWidth(label, "Times-Italic", size)
         if c is not None:
