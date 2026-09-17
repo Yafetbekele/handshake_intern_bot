@@ -142,6 +142,43 @@ JOBS: dict[str, dict[str, str]] = {
         "more": "",
         "button": "Apply",
     },
+    # Asks only simple questions the assistant has saved answers for.
+    "1008": {
+        "title": "Firmware Engineering Intern",
+        "employer": "Theta Devices",
+        "where": "Onsite, based in Austin, TX",
+        "dates": "Full-time.From June 1, 2027 to August 20, 2027",
+        "kind": "Internship",
+        "body": (
+            "Summer internship writing firmware in C++ for microcontrollers. "
+            "Debugging with Git and Docker, code review, distributed systems "
+            "background helpful, algorithms and data structures coursework."
+        ),
+        "more": "",
+        "button": "Apply",
+        "questions": [
+            {"type": "text", "label": "Phone number", "required": True},
+            {"type": "yesno", "label": "Are you legally authorized to work in the United States?"},
+        ],
+    },
+    # Asks something personal that must be left for the student.
+    "1009": {
+        "title": "Systems Engineering Intern",
+        "employer": "Iota Aerospace",
+        "where": "Onsite, based in Denver, CO",
+        "dates": "Full-time.From May 25, 2027 to August 15, 2027",
+        "kind": "Internship",
+        "body": (
+            "Summer internship on embedded systems: Python, Java, API design, "
+            "Docker, Git, code review, algorithms and distributed systems."
+        ),
+        "more": "",
+        "button": "Apply",
+        "questions": [
+            {"type": "text", "label": "Phone number", "required": True},
+            {"type": "text", "label": "Will you now or in the future require visa sponsorship?", "required": True},
+        ],
+    },
 }
 
 ALL_IDS = sorted(JOBS)
@@ -233,6 +270,11 @@ function submitApp() {{
   done.setAttribute('data-resume', window.picked.resume || '');
   done.setAttribute('data-cover', window.picked['cover-letter'] || '');
   done.setAttribute('data-transcript', window.picked.transcript || '');
+  var typed = [];
+  document.querySelectorAll('#dialog input[type=text], #dialog input[type=radio]:checked').forEach(function (el) {{
+    typed.push((el.id || el.name) + '=' + el.value);
+  }});
+  done.setAttribute('data-answers', typed.join('|'));
 }}
 </script>
 </body></html>"""
@@ -319,6 +361,24 @@ def apply_form_extras(job_id: str) -> str:
     question = JOBS[job_id].get("question")
     if question:
         parts.append(f"<label for='q1'>{question} *</label><textarea id='q1' required></textarea>")
+    for index, item in enumerate(JOBS[job_id].get("questions", [])):
+        field_id = f"q-{index}"
+        star = " *" if item.get("required") else ""
+        if item["type"] == "yesno":
+            parts.append(
+                f"<fieldset role='radiogroup'><legend>{item['label']}{star}</legend>"
+                f"<label for='{field_id}-y'>Yes</label>"
+                f"<input type='radio' id='{field_id}-y' name='{field_id}' value='Yes' />"
+                f"<label for='{field_id}-n'>No</label>"
+                f"<input type='radio' id='{field_id}-n' name='{field_id}' value='No' />"
+                "</fieldset>"
+            )
+        else:
+            required = " required" if item.get("required") else ""
+            parts.append(
+                f"<label for='{field_id}'>{item['label']}{star}</label>"
+                f"<input type='text' id='{field_id}' name='{field_id}'{required} />"
+            )
     return "".join(parts)
 
 

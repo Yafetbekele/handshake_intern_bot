@@ -23,6 +23,11 @@
   "max_search_pages": 4,
   "delay_between_applications_seconds": [20, 45],
 
+  "tailor_resume": false,
+  "use_ai_for_tailoring": true,
+  "answer_questions": true,
+  "profile_path": "",
+
   "auto_submit": false,
   "headless": false
 }

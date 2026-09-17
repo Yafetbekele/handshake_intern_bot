@@ -64,6 +64,17 @@ class ResumeTailor:
         else:
             print("Resume tailoring: rules from your profile (AI switched off).")
 
+    def saved_answers(self) -> list[dict[str, Any]]:
+        """Simple application answers from the profile, if there are any."""
+        if not self.profile_path.exists():
+            return []
+        try:
+            profile = tailor.load_profile(self.profile_path)
+        except Exception:
+            return []
+        answers = profile.get("application_answers", [])
+        return answers if isinstance(answers, list) else []
+
     def for_job(self, job: Job) -> Path | None:
         if not self.enabled:
             return None
@@ -124,6 +135,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "delay_between_applications_seconds": [20, 45],
     "auto_submit": False,
     "tailor_resume": False,
+    "answer_questions": True,
     "use_ai_for_tailoring": True,
     "profile_path": "",
     "headless": False,
@@ -438,6 +450,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
             transcript_name=str(config.get("transcript_doc_name", "")),
         )
 
+        answers = tailorer.saved_answers() if config.get("answer_questions", True) else []
+        if answers:
+            print(f"\nSaved answers available for {len(answers)} kinds of question.")
+            print("Questions about sponsorship, citizenship, clearance, pay, criminal history")
+            print("or demographics are always left for you.")
+
         cap = int(config.get("max_applications_per_run", 15))
         delay_low, delay_high = (
             list(config.get("delay_between_applications_seconds", [20, 45])) + [45]
@@ -479,7 +497,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
             if tailored is not None:
                 job_documents = replace(documents, resume_path=str(tailored), tailored_resume=True)
 
-            status, note = session.apply(job, job_documents, dry_run=dry_run)
+            status, note = session.apply(job, job_documents, dry_run=dry_run, answers=answers)
             counts[status] = counts.get(status, 0) + 1
             ledger.record(
                 job.job_id, status, job.title, job.employer,

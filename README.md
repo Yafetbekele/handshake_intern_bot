@@ -149,6 +149,26 @@ form without submitting.
 the application in a single click. In the real modes it is pressed like any
 other Apply button.
 
+### Answering simple questions
+
+Some applications ask for a phone number, your graduation date, or whether you
+are authorized to work. Put those in `application_answers` in your profile and
+the tool fills them in:
+
+```json
+{"match": ["phone", "mobile"], "value": "(555) 010-0000"}
+{"match": ["authorized to work"], "value": "Yes", "kind": "yesno"}
+```
+
+A field is only filled when its label clearly matches one of your answers.
+Anything else is left empty, which holds the application back for you.
+
+**Some questions are never answered for you.** Sponsorship, citizenship,
+security clearance, pay, criminal history, and any demographic question are
+always left alone, and the posting goes on your apply-yourself list. Those
+answers are personal or legal judgements, and a wrong one can cost you an
+offer. Set `answer_questions` to false to switch the whole feature off.
+
 ### Internships to apply to yourself
 
 Good matches the tool can't apply to go into a folder named **Internships to

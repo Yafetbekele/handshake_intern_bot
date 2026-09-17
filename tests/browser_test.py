@@ -319,6 +319,35 @@ try:
             check("tailored file is what went out",
                   session.page.get_attribute("#done", "data-resume") == "Jane_Doe_Resume.pdf",
                   str(session.page.get_attribute("#done", "data-resume")))
+
+            print()
+            print("=" * 70)
+            print("18. SIMPLE QUESTIONS ANSWERED FROM SAVED ANSWERS")
+            print("=" * 70)
+            saved_answers = [
+                {"match": ["phone", "mobile"], "value": "(555) 010-0000"},
+                {"match": ["authorized to work", "legally authorized"], "value": "Yes", "kind": "yesno"},
+                {"match": ["sponsorship"], "value": "No", "kind": "yesno"},
+            ]
+            simple = session.load_job("1008")
+            status, note = session.apply(simple, docs, dry_run=False, answers=saved_answers)
+            print(f"  status={status}  note={note}")
+            check("application went through", status == "applied", status)
+            typed = session.page.get_attribute("#done", "data-answers") or ""
+            print(f"  form received: {typed}")
+            check("phone number filled in", "(555) 010-0000" in typed, typed)
+            check("work authorization answered Yes", "q-1-y=Yes" in typed, typed)
+
+            print()
+            print("=" * 70)
+            print("19. SENSITIVE QUESTIONS ARE LEFT FOR THE STUDENT")
+            print("=" * 70)
+            sensitive = session.load_job("1009")
+            status, note = session.apply(sensitive, docs, dry_run=False, answers=saved_answers)
+            print(f"  status={status}  note={note}")
+            check("held back for the student", status == "needs_manual", status)
+            check("names the sponsorship question", "sponsorship" in note.lower(), note)
+            check("nothing submitted", "Application submitted" not in session.page.inner_text("body"))
 finally:
     server.shutdown()
 

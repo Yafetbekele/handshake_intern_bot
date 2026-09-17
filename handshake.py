@@ -155,6 +155,21 @@ EXTERNAL_TEXT = re.compile(
     r"apply\s+externally|apply\s+on\s+(company|employer)|external\s+application",
     re.IGNORECASE,
 )
+# Questions the assistant must never answer for the student. These are personal
+# or legal judgements, and a wrong answer can cost an offer.
+SENSITIVE_QUESTION = re.compile(
+    r"sponsor|visa|citizen|green card|work permit|clearance|secret|salary|compensation|"
+    r"wage|felon|criminal|conviction|background check|drug test|gender|race|ethnic|"
+    r"hispanic|latino|veteran|disab|age\b|date of birth|birth date|marital|pregnan|religion|"
+    r"social security|ssn",
+    re.IGNORECASE,
+)
+
+# Document controls are handled elsewhere, so the question filler skips them.
+DOCUMENT_FIELD = re.compile(r"resume|cover letter|transcript|search your|upload", re.IGNORECASE)
+
+YES_NO_TEXT = re.compile(r"^\s*(yes|no)\s*$", re.IGNORECASE)
+
 APPLIED_BUTTON_TEXT = re.compile(r"^\s*(applied|withdraw( application)?)\s*$", re.IGNORECASE)
 SUBMIT_TEXT = re.compile(r"submit\s+application|^\s*submit\s*$", re.IGNORECASE)
 
@@ -250,6 +265,33 @@ def classify_document_label(label: str) -> str:
 
 
 # Label text for a form control, with the control's own option text removed.
+# The question a radio button belongs to, e.g. "Are you authorized to work?"
+# rather than the button's own "Yes" or "No".
+GROUP_QUESTION_JS = """
+(node) => {
+  const clean = (el) => {
+    if (!el) return '';
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll('input, select, textarea, button, label').forEach(e => e.remove());
+    return (copy.textContent || '').replace(/\\s+/g, ' ').trim();
+  };
+  const set = node.closest('fieldset, [role="radiogroup"], [role="group"]');
+  if (set) {
+    const legend = set.querySelector('legend, h3, h4, [id]');
+    const label = set.getAttribute('aria-label') || (legend ? legend.textContent : '');
+    const text = (label || '').replace(/\\s+/g, ' ').trim() || clean(set);
+    if (text) return text.slice(0, 160);
+  }
+  let parent = node.parentElement;
+  for (let i = 0; i < 4 && parent; i++) {
+    const text = clean(parent);
+    if (text) return text.slice(0, 160);
+    parent = parent.parentElement;
+  }
+  return '';
+}
+"""
+
 LABEL_JS = """
 (node) => {
   const strip = (el) => {
@@ -924,6 +966,7 @@ class HandshakeSession:
         job: Job,
         documents: Documents,
         dry_run: bool = False,
+        answers: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str]:
         """Attempt one application. Returns (status, note).
 
@@ -989,8 +1032,18 @@ class HandshakeSession:
 
         attached, attach_note, missing_documents = self._attach_documents(documents, dry_run)
 
+        answered, refused = self._fill_saved_answers(dialog, answers or [])
+        if answered:
+            attach_note += "; answered " + "; ".join(answered[:4])
+
         missing = [f"attach your {kind}" for kind in missing_documents]
-        missing += self._missing_required_fields(attached)
+        missing += [f"{q} (left for you to answer)" for q in refused]
+        # A refused question is also an empty required field; report it once.
+        refused_text = " ".join(refused).lower()
+        missing += [
+            field for field in self._missing_required_fields(attached)
+            if not refused or field.lower().strip("* ") not in refused_text
+        ]
         if missing:
             self._dismiss_dialog()
             return "needs_manual", "unanswered required: " + "; ".join(missing[:5])
@@ -1357,6 +1410,87 @@ class HandshakeSession:
 
         note = ", ".join(notes) if notes else "no document fields filled"
         return attached, note, []
+
+    @staticmethod
+    def _saved_answer(label: str, answers: list[dict[str, Any]]) -> dict[str, Any] | None:
+        text = " ".join(label.lower().split())
+        for answer in answers:
+            for phrase in answer.get("match", []):
+                if str(phrase).lower() in text:
+                    return answer
+        return None
+
+    def _fill_saved_answers(
+        self, dialog: Locator, answers: list[dict[str, Any]]
+    ) -> tuple[list[str], list[str]]:
+        """Answer simple questions from the student's saved answers.
+
+        Returns (what was filled, sensitive questions deliberately left alone).
+        A field is only filled when its label clearly matches a saved answer.
+        """
+        assert self.page is not None
+        filled: list[str] = []
+        refused: list[str] = []
+        if not answers:
+            return filled, refused
+
+        try:
+            controls = dialog.locator("input, textarea, select")
+            count = min(controls.count(), 40)
+        except Exception:
+            return filled, refused
+
+        handled_groups: set[str] = set()
+        for index in range(count):
+            control = controls.nth(index)
+            try:
+                if not control.is_visible() or not control.is_editable():
+                    continue
+                kind = (control.get_attribute("type") or control.evaluate("n => n.tagName")).lower()
+            except Exception:
+                continue
+            if kind in {"hidden", "file", "submit", "button", "reset", "image", "checkbox"}:
+                continue
+
+            own_label = " ".join(self._label_for(control).split())[:120]
+            question = own_label
+            if kind == "radio":
+                try:
+                    question = " ".join(str(control.evaluate(GROUP_QUESTION_JS) or "").split())[:160]
+                except Exception:
+                    question = ""
+            label = question or own_label
+            if not label or DOCUMENT_FIELD.search(label):
+                continue
+            if SENSITIVE_QUESTION.search(label):
+                refused.append(label)
+                continue
+
+            answer = self._saved_answer(label, answers)
+            if answer is None:
+                continue
+
+            try:
+                if kind == "radio":
+                    name = control.get_attribute("name") or label
+                    if name in handled_groups:
+                        continue
+                    if own_label.strip().lower() != str(answer["value"]).strip().lower():
+                        continue
+                    control.check(force=True)
+                    handled_groups.add(name)
+                    label = f"{label} -> {own_label}"
+                elif kind == "select":
+                    control.select_option(label=str(answer["value"]))
+                else:
+                    if (control.input_value() or "").strip():
+                        continue
+                    control.fill(str(answer["value"]))
+            except Exception:
+                continue
+            filled.append(f"{label}: {answer['value']}")
+
+        return filled, refused
 
     def _missing_required_fields(self, attached: set[str]) -> list[str]:
         """Labels of required fields still empty, ignoring satisfied document slots."""
