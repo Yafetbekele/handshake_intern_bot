@@ -42,3 +42,6 @@ jobs:
 
       - name: Question prompt tests
         run: python tests/prompts_test.py
+
+      - name: Cover letter tests
+        run: python tests/cover_letter_test.py

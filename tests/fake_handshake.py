@@ -532,7 +532,13 @@ class Handler(BaseHTTPRequestHandler):
         query_string = urlencode(flat)
 
         cards, pager = "", ""
-        if page == 1:
+        if query == "deep search":
+            # Results spread three to a page, to test searching deeper.
+            ids = visible_ids(params)[(page - 1) * 3 : page * 3]
+            cards = result_cards(urlencode(params, doseq=True), ids)
+            next_params = dict(flat, page=str(page + 1))
+            pager = f"<button aria-label='next page' onclick=\"location.href='/job-search?{urlencode(next_params)}'\"></button>"
+        elif page == 1:
             if flat.get("style") == "buttons":
                 cards = button_cards()
             else:

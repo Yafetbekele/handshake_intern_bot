@@ -35,8 +35,9 @@ commands are needed.
      window before every submission.
    - **Apply automatically** submits without asking, after a warning.
 3. Set **Most applications this run** (1 to 100, used by the applying modes) and
-   **Postings to review** (10 to 1000, the default is 300). Reviewing more finds
-   more but takes longer, at roughly 4 to 8 seconds a posting.
+   **Postings to review** (10 to 1000, the default is 300). It keeps searching
+   deeper until it has that many new postings to review, or Handshake runs out.
+   Reviewing more finds more but takes longer, at roughly 4 to 8 seconds a posting.
 4. Click **Start**. A browser opens on Handshake. Sign in there the first time.
 5. When it finishes, it offers to open your results in Excel.
 
@@ -169,6 +170,30 @@ to upload, or name documents already saved on Handshake in `config.json`:
 python main.py apply --resume resume.pdf --cover-letter cover_letter.pdf --transcript transcript.pdf
 ```
 
+### Cover letters
+
+When an application requires a cover letter and you haven't given the tool one,
+it writes one for that job and attaches it. Turn this off with the launcher's
+checkbox under Optional, or `--no-cover-letters`.
+
+- **Your own letter is the starting point.** Put your baseline letter in
+  `profile/cover_letter_base.txt`. Write `{company}` and `{role}` where the
+  employer and job title go. For each job, Claude adapts your letter: the company
+  and role, and which of your experiences it leads with, in your voice. With no
+  baseline yet, it writes from your career profile.
+- **Short and direct:** about 200 to 250 words in three paragraphs, one page, with
+  the same header as your resume.
+- **Only true facts.** Every sentence is checked. Anything that brings in a
+  number, tool, name or claim that isn't in your letter or profile is cut. In a
+  sentence about you, a skill only the posting mentions can't be claimed. Each
+  experience's "never claim" list in your profile applies to sentences about that
+  experience. If more than two sentences have to be cut, or Claude isn't
+  available, the tool falls back to your baseline letter with the company and
+  role filled in, or to a plain letter built from your profile's own wording.
+- **Saved per job** in `tailored_resumes/<job>/` as a PDF, plus
+  `cover_letter.txt` and `cover_letter.json` (what was cut and why).
+- In a practice run the letter is written but not uploaded.
+
 ### What gets submitted and what doesn't
 
 Handshake's application form has one section per document, such as "Attach your
@@ -177,8 +202,10 @@ resume" and "Attach your cover letter". The tool fills each section like this:
 - **Resume.** Handshake usually attaches your default resume already. If not,
   the tool picks a saved resume or uploads the one you gave it.
 - **Transcript.** It picks a saved transcript, or uploads the one you gave it.
-- **Cover letter.** It only attaches one you named or gave it. It never guesses,
-  because a letter written for one employer shouldn't go to another.
+- **Cover letter.** If you named or gave it one, it uses that. Otherwise it
+  writes one for this job (see **Cover letters** below). Handshake only shows a
+  cover letter section when the employer requires one, so no letter is written
+  for postings that don't ask. It never reuses one employer's letter for another.
 
 Then it checks for anything still empty, such as a document section or a
 required question like a phone number. If something is left, it closes the
@@ -304,9 +331,17 @@ resume can use it.
   tool ranks your pre-written bullets, coursework and skills by how well they
   match the posting. That is free, instant and always honest.
 
+- **Then the page is filled.** Whatever space is left at the bottom gets more
+  of your profile's own bullets, most relevant to the job first, then
+  experiences the plan left out, high school honors, more coursework and more
+  skills. Anything that would spill onto a second page is skipped. Only your
+  profile's own wording is added, so filling never adds a claim.
+
 The result keeps your original resume's format: Times, bold section headings,
-the organization in bold with the role in italics, and dash bullets. It is
-always one page.
+the organization in bold with the role in italics, and dash bullets. Skills
+sit right under Education, where a recruiter sees them first. It is always one
+full page. Resumes made before this layout are redrawn the next time they're
+used, keeping the choices already made for that job.
 
 ### Signing Claude Code in, once
 
@@ -361,15 +396,16 @@ python main.py list
 | Flag | Meaning |
 | --- | --- |
 | `--resume PATH` | Your resume as PDF, DOCX or TXT. |
-| `--cover-letter PATH` | Uploaded when a posting requires a cover letter. |
+| `--cover-letter PATH` | Your own cover letter, uploaded as is when a posting requires one. |
+| `--no-cover-letters` | Don't write cover letters; postings that require one go on your apply-yourself list. |
 | `--transcript PATH` | Uploaded when a posting requires a transcript. |
 | `--major NAME` | Skip the prompt and target this major. |
 | `--location CITY` | Preferred location, repeatable. Remote postings always pass. |
 | `--strictness broad` | How picky matching is: broad, balanced or strict. |
 | `--min-score 0.15` | An exact minimum score instead of a strictness level. |
-| `--pages 6` | Read more search result pages per query. |
+| `--pages 6` | Result pages per search before it starts going deeper. The default is 4. |
 | `--answer-timeout 120` | Seconds to wait for an answer to a question no saved answer covers. The default is 60; 0 waits for ever. |
-| `--scan 100` | How many postings to open and score in one run. The default is 300. |
+| `--scan 100` | How many postings to review in one run. The default is 300. It's a target: if the first 4 pages of each search don't have that many, it keeps paging deeper (up to page 30) until they do or the searches run out. Postings settled in earlier runs (applied, declined, or apply on the employer's site) don't count. |
 | `--max 10` | Cap applications this run. |
 | `--dry-run` | Fill applications but never submit. |
 | `--auto-submit` | Submit without asking each time. |
@@ -514,6 +550,10 @@ python tests/list_server_test.py
 python tests/prompts_test.py
 ```
 
+```bash
+python tests/cover_letter_test.py
+```
+
 The tailoring tests use a made-up student in `tests/sample_profile.json` and a
 fake Claude program, so they never read your profile or use your Claude plan.
 
@@ -530,6 +570,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `majors.py` | Loads the majors and asks which one you want. |
 | `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
+| `cover_letter.py` | Cover letters adapted from your baseline letter, fact checked, as a one-page PDF. |
 | `prompts.py` | Asking a question at the keyboard without waiting for ever. |
 | `list_server.py` | Serves the apply-yourself list locally so Remove updates the saved list. |
 | `storage.py` | Application ledger, apply-yourself list and CSV export. |
@@ -547,7 +588,8 @@ fake Claude program, so they never read your profile or use your Claude plan.
   in. Those forms go on your apply-yourself list too.
 - Required fields are detected from the form's own markings. A question that is
   required but not marked that way can't be seen, so watch the first few runs.
-- Nothing here writes cover letters.
+- Cover letters are fact checked sentence by sentence, but read a few in
+  `tailored_resumes/` after your first runs to make sure they sound like you.
 - The fact checks catch invented numbers, tools, and listed false claims. They
   can't catch every possible stretch of the truth, so skim `plan.json` or the
   PDF for the first few jobs.

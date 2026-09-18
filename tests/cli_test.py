@@ -21,6 +21,7 @@ os.environ["HSBOT_MANUAL_DIR"] = str(MANUAL_DIR)
 TAILORED_DIR = MANUAL_DIR.parent / (MANUAL_DIR.name + "_tailored")
 os.environ["HSBOT_TAILORED_DIR"] = str(TAILORED_DIR)
 os.environ["HSBOT_PROFILE"] = str(Path(__file__).with_name("sample_profile.json"))
+os.environ["HSBOT_COVER_BASE"] = str(Path(tempfile.gettempdir()) / "hsbot_no_cover_base.txt")  # never the real letter
 # The run's ledger, reports and browser profile go to a temporary folder too,
 # so the student's real data folder is never moved, read or deleted.
 DATA = MANUAL_DIR.parent / (MANUAL_DIR.name + "_data")

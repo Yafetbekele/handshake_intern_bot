@@ -17,6 +17,7 @@ from pathlib import Path
 os.environ["HSBOT_MANUAL_DIR"] = tempfile.mkdtemp(prefix="hsbot_manual_")
 TEMP_DATA = Path(tempfile.mkdtemp(prefix="hsbot_data_"))
 os.environ["HSBOT_DATA_DIR"] = str(TEMP_DATA)
+os.environ["HSBOT_COVER_BASE"] = str(Path(tempfile.gettempdir()) / "hsbot_no_cover_base.txt")  # never the real letter
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

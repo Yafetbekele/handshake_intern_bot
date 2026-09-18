@@ -169,6 +169,52 @@ check("required entries survived", "Home Weather Station" in text and "IT Help D
 
 print()
 print("=" * 70)
+print("5b. SHORT PLANS FILL THE PAGE WITH MORE OF THE PROFILE")
+print("=" * 70)
+short_plan = tailor.rule_plan(profile, EMBEDDED_JOB[1], EMBEDDED_JOB[0])
+short_plan.sections = [{"heading": short_plan.sections[0]["heading"],
+                        "entries": [dict(short_plan.sections[0]["entries"][0],
+                                         bullets=short_plan.sections[0]["entries"][0]["bullets"][:1])]}]
+short_plan.skills = short_plan.skills[:2]
+short_plan.coursework = short_plan.coursework[:1]
+
+
+def text_bottom(pdf_path: Path) -> float:
+    with pdfplumber.open(pdf_path) as pdf:
+        page = pdf.pages[0]
+        return max(w["bottom"] for w in page.extract_words()) / page.height
+
+
+bare = tailor.render_pdf(profile, short_plan, WORK / "bare.pdf", fill=False)
+filled = tailor.render_pdf(profile, short_plan, WORK / "filled.pdf", job_text=EMBEDDED_JOB[1], title=EMBEDDED_JOB[0])
+pages, filled_text = pdf_text(filled)
+print(f"  without filling the text ends at {text_bottom(bare):.0%}, filled at {text_bottom(filled):.0%}")
+check("filling uses more of the page", text_bottom(filled) > text_bottom(bare) + 0.1)
+check("still one page", pages == 1, f"pages={pages}")
+flat_text = " ".join(filled_text.split())
+all_bullets = [b["text"] for e in tailor.profile_entries(profile).values() for b in e["bullets"]]
+check("with room to spare, every bullet in the profile is used",
+      all(b[:40] in flat_text for b in all_bullets), str([b[:30] for b in all_bullets if b[:40] not in flat_text]))
+check("and every skill", all(s["name"] in flat_text for s in profile["skills"]))
+check("skills come before the experience sections",
+      filled_text.index("SKILLS") < filled_text.index(short_plan.sections[0]["heading"]))
+
+big_filled = tailor.render_pdf(big, short_plan, WORK / "big_filled.pdf", job_text=EMBEDDED_JOB[1], title=EMBEDDED_JOB[0])
+print(f"  a long profile from the same short plan ends at {text_bottom(big_filled):.0%}")
+check("a long profile fills the page", text_bottom(big_filled) > 0.85, f"{text_bottom(big_filled):.0%}")
+check("without spilling onto a second page", pdf_text(big_filled)[0] == 1)
+
+old_folder = WORK / "tailored" / "5003-old-co"
+old_folder.mkdir(parents=True)
+(old_folder / "Jane_Doe_Resume.pdf").write_bytes(bare.read_bytes())
+(old_folder / "plan.json").write_text(json.dumps(tailor.asdict(short_plan)), encoding="utf-8")  # no layout version
+redrawn = tailor.tailor_resume("5003", EMBEDDED_JOB[0], "Old Co", EMBEDDED_JOB[1])
+check("a resume from the old layout is redrawn", "redrew" in " ".join(redrawn.notes), str(redrawn.notes))
+check("the redrawn resume is filled", text_bottom(redrawn.path) >= text_bottom(filled) - 0.01,
+      f"{text_bottom(redrawn.path):.0%}")
+
+print()
+print("=" * 70)
 print("6. APPLY-YOURSELF LIST LINKS THE RESUME")
 print("=" * 70)
 listing = ManualList(WORK / "Internships to apply to yourself")

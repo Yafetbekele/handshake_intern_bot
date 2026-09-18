@@ -485,6 +485,16 @@ def ai_plan(
     timeout: int = 300,
 ) -> tuple[Plan | None, str]:
     """Ask Claude Code for a plan. Returns (plan or None, explanation)."""
+    data, reason = ask_claude_json(_ai_prompt(profile, job_text, title, employer), SYSTEM_PROMPT, exe, timeout)
+    if data is None:
+        return None, reason
+    return _sanitize_ai_plan(data, profile, fallback), "tailored with Claude"
+
+
+def ask_claude_json(
+    prompt: str, system_prompt: str, exe: str | None = None, timeout: int = 300
+) -> tuple[dict[str, Any] | None, str]:
+    """One tool-less Claude Code call on the student's plan that answers with JSON."""
     exe = exe or find_claude()
     if not exe:
         return None, "Claude Code was not found."
@@ -494,12 +504,12 @@ def ai_plan(
         "--tools", "",
         "--no-session-persistence",
         "--strict-mcp-config",
-        "--system-prompt", SYSTEM_PROMPT,
+        "--system-prompt", system_prompt,
     ]
     try:
         done = subprocess.run(
             command,
-            input=_ai_prompt(profile, job_text, title, employer),
+            input=prompt,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -518,7 +528,7 @@ def ai_plan(
     data = _extract_json(str(envelope.get("result", "")))
     if data is None:
         return None, "Claude Code's answer was not valid JSON."
-    return _sanitize_ai_plan(data, profile, fallback), "tailored with Claude"
+    return data, "ok"
 
 
 # --------------------------------------------------------------------- render
@@ -529,8 +539,24 @@ def _slug(text: str, limit: int = 40) -> str:
     return slug[:limit].strip("-") or "employer"
 
 
-def render_pdf(profile: dict[str, Any], plan: Plan, path: str | Path) -> Path:
-    """Draw the plan in the original resume's format, shrinking until it fits one page."""
+def _same_point(a: str, b: str) -> bool:
+    """Whether two bullets say the same thing, so a reworded one isn't repeated."""
+    wa = {w for w in re.findall(r"[a-z0-9+#]+", a.lower()) if len(w) > 3}
+    wb = {w for w in re.findall(r"[a-z0-9+#]+", b.lower()) if len(w) > 3}
+    if not wa or not wb:
+        return a.strip().lower() == b.strip().lower()
+    return len(wa & wb) / min(len(wa), len(wb)) >= 0.6
+
+
+def render_pdf(
+    profile: dict[str, Any], plan: Plan, path: str | Path, job_text: str = "", title: str = "", fill: bool = True
+) -> Path:
+    """Draw the plan in the original resume's format on exactly one page.
+
+    With `fill`, empty space at the bottom is filled with more of the profile's
+    own content, most relevant to the job first: further bullets, experiences
+    the plan left out, high school honors, coursework and skills.
+    """
     from reportlab.lib.pagesizes import letter
     from reportlab.pdfbase.pdfmetrics import stringWidth
     from reportlab.pdfgen import canvas as pdf_canvas
@@ -540,13 +566,15 @@ def render_pdf(profile: dict[str, Any], plan: Plan, path: str | Path) -> Path:
     entries = profile_entries(profile)
     width, height = letter
 
-    # Working copy we can trim if the page overflows.
+    # Working copy we can grow to fill the page, or trim if it overflows.
     sections = [
         {"heading": s["heading"], "entries": [dict(e, bullets=list(e["bullets"])) for e in s["entries"]]}
         for s in plan.sections
     ]
     honors = list(plan.honors)
     include_hs = plan.include_high_school and bool(honors)
+    coursework = list(plan.coursework)
+    skills = list(plan.skills)
 
     def layout(c: Any | None, size: float) -> float:
         margin_x, top, bottom = 54.0, 50.0, 46.0
@@ -611,7 +639,7 @@ def render_pdf(profile: dict[str, Any], plan: Plan, path: str | Path) -> Path:
             c.drawString(indent, y, label)
         from reportlab.lib.utils import simpleSplit
 
-        for i, piece in enumerate(simpleSplit(" / ".join(plan.coursework), "Times-Roman", size, usable - 22 - label_w)):
+        for i, piece in enumerate(simpleSplit(" / ".join(coursework), "Times-Roman", size, usable - 22 - label_w)):
             if c is not None:
                 c.setFont("Times-Roman", size)
                 c.drawString(indent + label_w, y, piece)
@@ -624,6 +652,16 @@ def render_pdf(profile: dict[str, Any], plan: Plan, path: str | Path) -> Path:
             for honor in honors:
                 text(indent, y, [("Times-Roman", honor)], size)
                 y -= line
+
+        # Skills, near the top where a recruiter sees them first
+        if skills:
+            heading("SKILLS")
+            for piece in simpleSplit(", ".join(skills), "Times-Roman", size, usable):
+                if c is not None:
+                    c.setFont("Times-Roman", size)
+                    c.drawString(margin_x, y, piece)
+                y -= line
+            y -= size * 0.2
 
         # Experience-style sections
         for section in sections:
@@ -650,20 +688,78 @@ def render_pdf(profile: dict[str, Any], plan: Plan, path: str | Path) -> Path:
                 for bullet in item["bullets"]:
                     wrapped(indent, "-", bullet, "Times-Roman", size)
                 y -= size * 0.35
-
-        # Skills
-        y -= size * 0.2
-        skills_label = "Skills: "
-        label_w = stringWidth(skills_label, "Times-Bold", size)
-        if c is not None:
-            c.setFont("Times-Bold", size)
-            c.drawString(margin_x, y, skills_label)
-        for piece in simpleSplit(", ".join(plan.skills), "Times-Roman", size, usable - label_w):
-            if c is not None:
-                c.setFont("Times-Roman", size)
-                c.drawString(margin_x + label_w, y, piece)
-            y -= line
         return y - bottom
+
+    def additions() -> list[tuple[float, str, Any]]:
+        """Everything in the profile not on the page yet, most useful first."""
+        job_norm, job_tokens = _job_text(job_text, title)
+        shown = {e["id"]: e for s in sections for e in s["entries"]}
+        found: list[tuple[float, str, Any]] = []
+        for section in profile.get("sections", []):
+            for entry in section.get("entries", []):
+                for order, bullet in enumerate(entry.get("bullets", [])):
+                    text = bullet["text"] if isinstance(bullet, dict) else str(bullet)
+                    tags = bullet.get("tags", []) if isinstance(bullet, dict) else []
+                    on_page = shown.get(entry["id"], {}).get("bullets", [])
+                    if any(_same_point(text, existing) for existing in on_page):
+                        continue
+                    score = _tag_score(tags, job_norm, job_tokens) + entry.get("priority", 5) * 0.3 - order * 0.05
+                    if entry.get("trim_first"):
+                        score -= 5
+                    found.append((10 + score, "bullet", (section["heading"], entry["id"], text)))
+        if not include_hs or len(honors) < len(earlier_education(profile).get("honors", [])):
+            for honor in earlier_education(profile).get("honors", []):
+                if honor["name"] not in honors:
+                    found.append((5, "honor", honor["name"]))
+        for course in primary_education(profile).get("coursework", []):
+            if course["name"] not in coursework:
+                found.append((3 + _tag_score(course.get("tags", []), job_norm, job_tokens) * 0.1, "course", course["name"]))
+        for skill in profile.get("skills", []):
+            if skill["name"] not in skills:
+                found.append((2 + _tag_score(skill.get("tags", []), job_norm, job_tokens) * 0.1, "skill", skill["name"]))
+        found.sort(key=lambda t: -t[0])
+        return found
+
+    def add(kind: str, value: Any) -> Any:
+        """Put one addition on the page; returns what undo() needs."""
+        nonlocal include_hs
+        if kind == "bullet":
+            heading_name, entry_id, text = value
+            for section in sections:
+                for item in section["entries"]:
+                    if item["id"] == entry_id:
+                        item["bullets"].append(text)
+                        return ("bullet", item)
+            target = next((s for s in sections if s["heading"] == heading_name), None)
+            if target is None:  # a section the plan left out goes last
+                target = {"heading": heading_name, "entries": []}
+                sections.append(target)
+            item = {"id": entry_id, "bullets": [text]}
+            target["entries"].append(item)
+            return ("entry", target, item)
+        if kind == "honor":
+            was = include_hs
+            include_hs = True
+            honors.append(value)
+            return ("honor", was)
+        (coursework if kind == "course" else skills).append(value)
+        return (kind,)
+
+    def undo(record: Any) -> None:
+        nonlocal include_hs
+        if record[0] == "bullet":
+            record[1]["bullets"].pop()
+        elif record[0] == "entry":
+            record[1]["entries"].remove(record[2])
+            if not record[1]["entries"]:
+                sections.remove(record[1])
+        elif record[0] == "honor":
+            honors.pop()
+            include_hs = record[1]
+        elif record[0] == "course":
+            coursework.pop()
+        else:
+            skills.pop()
 
     def trim_once() -> bool:
         """Remove the least valuable piece of content. False when nothing is left to cut."""
@@ -692,6 +788,13 @@ def render_pdf(profile: dict[str, Any], plan: Plan, path: str | Path) -> Path:
         return True
 
     size = 11.0
+    if fill and layout(None, size) >= 0:
+        # Fill the rest of the page: most relevant first, skipping anything
+        # that would spill onto a second page.
+        for _score, kind, value in additions():
+            record = add(kind, value)
+            if layout(None, size) < 0:
+                undo(record)
     for _ in range(40):
         if layout(None, size) >= 0:
             break
@@ -736,7 +839,17 @@ def tailor_resume(
 
     if reuse and pdf_path.exists() and plan_path.exists():
         saved = json.loads(plan_path.read_text(encoding="utf-8"))
-        return TailorResult(pdf_path, saved.get("method", "saved"), ["reused the resume made earlier for this job"])
+        if saved.get("layout") == LAYOUT_VERSION:
+            return TailorResult(pdf_path, saved.get("method", "saved"), ["reused the resume made earlier for this job"])
+        # Made with an older layout: keep its choices, draw it again the current way.
+        known = {f for f in Plan.__dataclass_fields__}
+        try:
+            plan = Plan(**{k: v for k, v in saved.items() if k in known})
+        except TypeError:
+            plan = None
+        if plan is not None:
+            _save_resume(profile, plan, folder, pdf_path, plan_path, job_id, title, employer, job_text)
+            return TailorResult(pdf_path, "saved", ["redrew the resume made earlier for this job to fill the page"])
 
     fallback = rule_plan(profile, job_text, title)
     plan, reason = (None, "AI tailoring is turned off")
@@ -746,11 +859,23 @@ def tailor_resume(
         plan = fallback
         plan.notes.append(reason)
 
-    render_pdf(profile, plan, pdf_path)
+    _save_resume(profile, plan, folder, pdf_path, plan_path, job_id, title, employer, job_text)
+    return TailorResult(pdf_path, plan.method, plan.notes)
+
+
+# Bump when the resume layout changes, so resumes made earlier are redrawn.
+LAYOUT_VERSION = 2  # 2: skills near the top, page filled
+
+
+def _save_resume(
+    profile: dict[str, Any], plan: Plan, folder: Path, pdf_path: Path, plan_path: Path,
+    job_id: str, title: str, employer: str, job_text: str,
+) -> None:
+    render_pdf(profile, plan, pdf_path, job_text=job_text, title=title)
     folder.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(
-        json.dumps(dict(asdict(plan), job={"id": job_id, "title": title, "employer": employer}), indent=2),
+        json.dumps(dict(asdict(plan), layout=LAYOUT_VERSION, job={"id": job_id, "title": title, "employer": employer}),
+                   indent=2),
         encoding="utf-8",
     )
     (folder / "job_posting.txt").write_text(f"{title}\n{employer}\n\n{job_text}", encoding="utf-8")
-    return TailorResult(pdf_path, plan.method, plan.notes)

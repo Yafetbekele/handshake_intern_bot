@@ -50,6 +50,7 @@ class LaunchSettings:
     locations: str = ""
     base_url: str = ""
     tailor_resume: bool = False
+    write_cover_letters: bool = True
     strictness: str = "balanced"
     looking_for: str = "internships"
     near: str = ""
@@ -171,6 +172,8 @@ def build_args(settings: LaunchSettings) -> list[str]:
     args += ["--scan", str(int(settings.scan))]
     if settings.tailor_resume:
         args.append("--tailor-resume")
+    if not settings.write_cover_letters and not settings.cover_letter.strip():
+        args.append("--no-cover-letters")
     if settings.strictness in STRICTNESS_KEYS:
         args += ["--strictness", settings.strictness]
     if settings.looking_for == "jobs":
@@ -381,6 +384,12 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
         ttk.Button(optional, text="Browse...", command=lambda: browse(var, title)).grid(row=row, column=2)
 
     optional_file(0, "Cover letter", cover_var, "Choose a cover letter")
+    letters_var = tk.BooleanVar(value=bool(initial.write_cover_letters))
+    ttk.Checkbutton(
+        optional,
+        text="No file? Write a cover letter for each posting that requires one",
+        variable=letters_var,
+    ).grid(row=6, column=1, sticky="w", padx=8, pady=(6, 0))
     optional_file(1, "Transcript", transcript_var, "Choose a transcript")
     ttk.Label(optional, text="Locations").grid(row=2, column=0, sticky="w", pady=3)
     ttk.Entry(optional, textvariable=locations_var, width=40).grid(row=2, column=1, sticky="ew", padx=8)
@@ -409,6 +418,7 @@ def ask_settings(initial: LaunchSettings, self_test: bool = False) -> LaunchSett
             locations=locations_var.get().strip(),
             base_url=base_url_var.get().strip(),
             tailor_resume=bool(tailor_var.get()),
+            write_cover_letters=bool(letters_var.get()),
             strictness=strict_keys.get(strict_var.get(), "balanced"),
             looking_for=looking_var.get() if looking_var.get() in {"internships", "jobs"} else "internships",
             near=near_var.get().strip(),

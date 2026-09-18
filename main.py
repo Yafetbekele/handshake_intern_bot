@@ -27,6 +27,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import cover_letter
 import majors
 import matcher
 import prompts
@@ -93,6 +94,47 @@ class ResumeTailor:
             return None
         how = {"ai": "Claude", "rules": "rules", "saved": "made earlier"}.get(result.method, result.method)
         print(f"  tailored resume ({how}): {result.path}")
+        for note in result.notes[:3]:
+            print(f"    {note}")
+        return result.path
+
+
+class LetterWriter:
+    """Writes a cover letter for a job whose application requires one."""
+
+    def __init__(self, config: dict[str, Any], tailorer: ResumeTailor) -> None:
+        self.enabled = bool(config.get("write_cover_letters", True))
+        self.profile_path = tailorer.profile_path
+        self.allow_ai = bool(config.get("use_ai_for_tailoring", True))
+        self._use_ai: bool | None = tailorer.use_ai if tailorer.enabled else None
+        if not self.enabled:
+            return
+        if str(config.get("cover_letter_path") or config.get("cover_letter_doc_name") or "").strip():
+            self.enabled = False  # the student's own letter is used as is
+            return
+        if not self.profile_path.exists():
+            print("[note] No career profile, so no cover letters can be written; "
+                  "postings that require one go on your apply-yourself list.")
+            self.enabled = False
+            return
+        base = "your baseline letter" if cover_letter.load_base() else "your profile (no baseline letter yet)"
+        print(f"Cover letters: written from {base} when an application requires one.")
+
+    def for_job(self, job: Job) -> Path | None:
+        if self._use_ai is None:  # checked on first use, only if a letter is needed
+            self._use_ai = self.allow_ai and tailor.claude_ready()[0]
+        print("  this application requires a cover letter; writing one...")
+        try:
+            result = cover_letter.cover_letter(
+                job.job_id, job.title, job.employer, job.description,
+                use_ai=self._use_ai, profile_path=self.profile_path,
+            )
+        except Exception as exc:  # never let a letter stop an application run
+            print(f"  [warn] could not write the cover letter ({type(exc).__name__}: {exc})")
+            return None
+        how = {"ai": "Claude, fact-checked", "baseline": "your baseline letter",
+               "profile": "your profile", "saved": "written earlier"}.get(result.method, result.method)
+        print(f"  cover letter ({how}): {result.path}")
         for note in result.notes[:3]:
             print(f"    {note}")
         return result.path
@@ -238,6 +280,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "near_location": "",
     "within_miles": 25,
     "tailor_resume": False,
+    "write_cover_letters": True,
     "answer_questions": True,
     "answer_timeout": 60,
     "use_ai_for_tailoring": True,
@@ -294,6 +337,8 @@ def load_config(args: argparse.Namespace) -> dict[str, Any]:
         config["tailor_resume"] = True
     if getattr(args, "no_ai", False):
         config["use_ai_for_tailoring"] = False
+    if getattr(args, "no_cover_letters", False):
+        config["write_cover_letters"] = False
     if getattr(args, "auto_submit", False):
         config["auto_submit"] = True
     if getattr(args, "headless", False):
@@ -316,6 +361,9 @@ def banner(text: str) -> None:
 
 
 # ------------------------------------------------------------------ candidates
+
+
+SETTLED_STATUSES = {"applied", "declined", "skipped_external"}
 
 
 def gather_candidates(
@@ -342,7 +390,16 @@ def gather_candidates(
     near = str(config.get("near_location") or "").strip()
     where = f" within {config.get('within_miles', 25)} miles of {near}" if near else ""
     banner(f"Searching Handshake for {major.name} {'jobs' if jobs_mode else 'internships'}{where}")
-    job_ids = session.collect_job_ids(queries, int(config.get("max_search_pages", 4)))
+    # Already settled in an earlier run: applied, declined, or only on the
+    # employer's own site. Held-back ones are tried again.
+    def settled(job_id: str) -> bool:
+        return ledger.status_of(job_id) in SETTLED_STATUSES
+
+    # "Postings to review" is a target: search deeper until it's reached.
+    job_ids = session.collect_job_ids(
+        queries, int(config.get("max_search_pages", 4)), want=limit_scan, skip=settled,
+        deepest_page=int(config.get("deepest_search_page", 30)),
+    )
     print(f"\n{len(job_ids)} unique postings found across {len(queries)} searches.")
     if not job_ids:
         print(
@@ -351,9 +408,12 @@ def gather_candidates(
             "'When it breaks' in the README."
         )
 
-    fresh = [j for j in job_ids if not ledger.applied(j)]
+    fresh = [j for j in job_ids if not settled(j)]
     if len(fresh) != len(job_ids):
-        print(f"{len(job_ids) - len(fresh)} already applied to in a previous run.")
+        print(f"{len(job_ids) - len(fresh)} already settled in earlier runs "
+              "(applied, declined, or apply on the employer's site).")
+    if len(fresh) < limit_scan:
+        print(f"The searches ran out at {len(fresh)} new postings, short of the {limit_scan} asked for.")
     fresh = fresh[:limit_scan]
 
     banner(f"Reviewing {len(fresh)} postings")
@@ -570,6 +630,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
             return 1
 
     tailorer = ResumeTailor(config)
+    letters = LetterWriter(config, tailorer)
 
     with HandshakeSession(config, load_selectors(), DATA_DIR / "browser_profile") as session:
         if not session.ensure_logged_in():
@@ -664,6 +725,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
             tailored = tailorer.for_job(job)
             if tailored is not None:
                 job_documents = replace(documents, resume_path=str(tailored), tailored_resume=True)
+            if letters.enabled:
+                job_documents = replace(job_documents, cover_letter_writer=lambda job=job: letters.for_job(job))
 
             status, note = session.apply(
                 job, job_documents, dry_run=dry_run, answers=answers, ask=ask
@@ -797,6 +860,12 @@ def add_shared_arguments(sub: argparse.ArgumentParser) -> None:
         help="make a resume for each job from profile/career_profile.json",
     )
     sub.add_argument(
+        "--no-cover-letters",
+        action="store_true",
+        dest="no_cover_letters",
+        help="don't write a cover letter when a posting requires one",
+    )
+    sub.add_argument(
         "--no-ai",
         action="store_true",
         dest="no_ai",
@@ -819,13 +888,13 @@ def add_shared_arguments(sub: argparse.ArgumentParser) -> None:
         help="exact match threshold from 0 to 1; overrides --strictness",
     )
     sub.add_argument(
-        "--pages", type=int, help="search result pages to read per query (default 4)"
+        "--pages", type=int, help="result pages per search before going deeper (default 4)"
     )
     sub.add_argument(
         "--scan",
         type=int,
         default=300,
-        help="maximum postings to open and score in one run (default 300)",
+        help="postings to review in one run; searches go deeper until this many are found (default 300)",
     )
     sub.add_argument("--base-url", dest="base_url", help="your school's Handshake URL")
     sub.add_argument(

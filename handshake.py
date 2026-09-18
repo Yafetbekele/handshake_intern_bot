@@ -231,6 +231,9 @@ class Documents:
     # When true, resume_path is a resume made for this job: it replaces the
     # default resume Handshake attaches, but only inside this one application.
     tailored_resume: bool = False
+    # Writes a cover letter for this job. Called only when the application
+    # actually has a cover letter slot and no letter was given.
+    cover_letter_writer: Callable[[], Path | None] | None = field(default=None, repr=False, compare=False)
 
     def name_for(self, kind: str) -> str:
         return str(getattr(self, f"{kind}_name", "") or "").strip()
@@ -647,31 +650,68 @@ class HandshakeSession:
     def _explicit_template(self) -> str:
         return str(self.config.get("search_url_template") or "").strip()
 
-    def collect_job_ids(self, queries: list[str], max_pages: int = 3) -> list[str]:
-        """Run each search query and gather unique posting ids in result order."""
+    def collect_job_ids(
+        self,
+        queries: list[str],
+        max_pages: int = 3,
+        want: int | None = None,
+        skip: Callable[[str], bool] | None = None,
+        deepest_page: int = 30,
+    ) -> list[str]:
+        """Run each search query and gather unique posting ids in result order.
+
+        Reads `max_pages` pages of every search first. With `want`, it then keeps
+        going deeper into each search, `max_pages` more at a time, until it has
+        found `want` postings worth reviewing (those `skip` doesn't rule out) or
+        every search has run out, stopping at `deepest_page`.
+        """
         assert self.page is not None
         found: list[str] = []
         seen: set[str] = set()
+        next_page = {query: 1 for query in queries}
+        finished: set[str] = set()
 
-        for query in queries:
-            print(f"  searching: {query!r}")
-            for page_number in range(1, max_pages + 1):
-                if not self._open_results(query, page_number):
-                    break
-                self._load_more_results()
+        def enough() -> bool:
+            return bool(want) and sum(1 for i in found if not (skip and skip(i))) >= int(want)
 
-                ids_on_page = self._job_ids_on_page()
-                new_ids = [i for i in ids_on_page if i not in seen]
-                for job_id in new_ids:
-                    seen.add(job_id)
-                    found.append(job_id)
-                print(f"    page {page_number}: {len(ids_on_page)} listed, {len(new_ids)} new")
+        limit = max_pages
+        while True:
+            for query in queries:
+                if query in finished or next_page[query] > limit:
+                    continue
+                first = next_page[query]
+                if first == 1:
+                    print(f"  searching: {query!r}")
+                elif self._explicit_template() or self._learned_template:
+                    print(f"  searching deeper: {query!r} from page {first}")
+                else:
+                    finished.add(query)  # deeper pages can only be reached by address
+                    continue
+                while next_page[query] <= limit:
+                    page_number = next_page[query]
+                    next_page[query] += 1
+                    if not self._open_results(query, page_number):
+                        finished.add(query)
+                        break
+                    self._load_more_results()
 
-                # Stop on an empty page, or when "next page" just repeats results.
-                if not ids_on_page or (page_number > 1 and not new_ids):
-                    break
+                    ids_on_page = self._job_ids_on_page()
+                    new_ids = [i for i in ids_on_page if i not in seen]
+                    for job_id in new_ids:
+                        seen.add(job_id)
+                        found.append(job_id)
+                    print(f"    page {page_number}: {len(ids_on_page)} listed, {len(new_ids)} new")
 
-        return found
+                    # Stop on an empty page, or when "next page" just repeats results.
+                    if not ids_on_page or (page_number > 1 and not new_ids):
+                        finished.add(query)
+                        break
+                    if limit > max_pages and enough():
+                        return found  # every search got its first pages; that's enough
+
+            if not want or enough() or limit >= deepest_page or all(q in finished for q in queries):
+                return found
+            limit = min(deepest_page, limit + max_pages)
 
     def _open_results(self, query: str, page_number: int) -> bool:
         """Put the browser on results page `page_number` for `query`."""
@@ -1562,6 +1602,20 @@ class HandshakeSession:
                             chosen = self._wait_for_slot(fieldset, 20)
                             if chosen:
                                 chosen = f"uploaded {path.name}"
+                        except Exception:
+                            chosen = None
+                if not chosen and kind == "cover_letter" and documents.cover_letter_writer is not None:
+                    written = documents.cover_letter_writer()
+                    if written is not None and dry_run:
+                        attached.add(key)
+                        notes.append(f"cover letter: {written.name} written, not uploaded in a practice run")
+                        continue
+                    upload = fieldset.locator("input[type='file']").first
+                    if written is not None and upload.count():
+                        try:
+                            upload.set_input_files(str(written))
+                            if self._wait_for_slot(fieldset, 20):
+                                chosen = f"uploaded {written.name}, written for this job"
                         except Exception:
                             chosen = None
 

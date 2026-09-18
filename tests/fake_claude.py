@@ -15,6 +15,30 @@ if args[:2] == ["auth", "status"]:
     print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"}))
     sys.exit(0)
 
+if "-p" in args and "cover letter" in " ".join(args).lower():
+    # A cover letter: honest sentences mixed with invented claims the checks must drop.
+    prompt = sys.stdin.read()
+    if "JOB POSTING" not in prompt:
+        print(json.dumps({"is_error": True, "result": "prompt missing job"}))
+        sys.exit(1)
+    letter = {
+        "paragraphs": [
+            "I'm excited to apply for this internship. Your team builds Kubernetes tools that help people every day.",
+            "I built a Raspberry Pi weather station that logs sensor data with Python. "
+            "I wrote the data logger that stores readings every 5 minutes in SQLite, and I learned a lot "
+            "about keeping a small system running reliably on its own. "
+            "I won first place at a national hackathon for it. "
+            "I also bring Kubernetes experience from production systems.",
+            "I work at the campus help desk, where I troubleshoot hardware and software issues for students and staff. "
+            "I enjoy explaining technical problems clearly and taking ownership of them until they are solved. "
+            "I would welcome the chance to bring that same care to your team, and to keep learning from engineers "
+            "who do this work every day. Thank you for your time and consideration.",
+        ],
+        "changes": "Led with the weather station.",
+    }
+    print(json.dumps({"type": "result", "is_error": False, "result": json.dumps(letter)}))
+    sys.exit(0)
+
 if "-p" in args:
     prompt = sys.stdin.read()
     if "JOB POSTING" not in prompt or "STUDENT PROFILE" not in prompt:

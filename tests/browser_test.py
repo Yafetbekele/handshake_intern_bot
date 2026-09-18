@@ -275,6 +275,24 @@ try:
 
             print()
             print("=" * 70)
+            print("14b. SEARCHING DEEPER UNTIL THE REQUESTED NUMBER IS FOUND")
+            print("=" * 70)
+            first_page = session.collect_job_ids(["deep search"], max_pages=1)
+            check("without a target, only the pages asked for", len(first_page) == 3, str(first_page))
+            seven = session.collect_job_ids(["deep search"], max_pages=1, want=7)
+            print(f"  wanting 7: {seven}")
+            check("keeps going deeper until it has 7", 7 <= len(seven) <= 9, str(seven))
+            skipped = set(first_page)
+            past = session.collect_job_ids(["deep search"], max_pages=1, want=4, skip=lambda i: i in skipped)
+            check("settled postings don't count toward the target",
+                  len([i for i in past if i not in skipped]) >= 4, str(past))
+            everything = session.collect_job_ids(["deep search"], max_pages=1, want=500)
+            check("stops when the search runs out", sorted(everything) == internship_ids, str(everything))
+            capped = session.collect_job_ids(["deep search"], max_pages=1, want=500, deepest_page=2)
+            check("never past the deepest page", len(capped) == 6, str(capped))
+
+            print()
+            print("=" * 70)
             print("15. CLICKABLE RESULT CARDS WITHOUT LINKS")
             print("=" * 70)
             session.config["search_url_template"] = "{base}/job-search?query={query}&page={page}&style=buttons"
@@ -467,6 +485,46 @@ try:
             except SystemExit as exc:
                 check("unknown city stops the run", "location filter" in str(exc.code), str(exc.code)[:80])
             session.config.update({"looking_for": "internships", "near_location": "", "search_url_template": original_template})
+
+            print()
+            print("=" * 70)
+            print("24. A COVER LETTER IS WRITTEN ONLY WHEN THE APPLICATION REQUIRES ONE")
+            print("=" * 70)
+            import shutil
+
+            import cover_letter as _letters
+
+            sample_profile = json.loads(Path(__file__).with_name("sample_profile.json").read_text(encoding="utf-8"))
+            letter_dir = Path(tempfile.mkdtemp(prefix="hsbot_letter_"))
+            written: list[str] = []
+
+            def writer() -> Path:
+                written.append("called")
+                return _letters.render_pdf(
+                    sample_profile, ["I'm applying for this role.", "Thank you for your time."],
+                    "Delta Systems", letter_dir / "Jane_Doe_Cover_Letter.pdf",
+                )
+
+            with_writer = Documents(resume_path="nonexistent.pdf", cover_letter_writer=writer)
+            status, note = session.apply(session.load_job("1006"), with_writer, dry_run=False)
+            check("no letter written when none is required", status == "applied" and not written, note)
+
+            status, note = session.apply(session.load_job("1005"), with_writer, dry_run=True)
+            print(f"  practice run: status={status}  note={note}")
+            check("letter written for a posting that requires one", written == ["called"])
+            check("the cover letter no longer holds it back", "cover letter" not in note, note)
+            check("practice run submits nothing", "Application submitted" not in session.page.inner_text("body"))
+
+            status, note = session.apply(
+                session.load_job("1005"), with_writer, dry_run=False,
+                ask=lambda question: "I want to build backend services.",
+            )
+            print(f"  real run: status={status}  note={note}")
+            check("application with a written letter goes through", status == "applied", note)
+            check("the written letter is the one attached",
+                  session.page.get_attribute("#done", "data-cover") == "Jane_Doe_Cover_Letter.pdf",
+                  str(session.page.get_attribute("#done", "data-cover")))
+            shutil.rmtree(letter_dir, ignore_errors=True)
 finally:
     server.shutdown()
 
