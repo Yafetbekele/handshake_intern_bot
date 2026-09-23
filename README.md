@@ -194,6 +194,25 @@ checkbox under Optional, or `--no-cover-letters`.
   `cover_letter.txt` and `cover_letter.json` (what was cut and why).
 - In a practice run the letter is written but not uploaded.
 
+### Just a resume or a letter, for one posting
+
+To get a tailored resume or cover letter without running a search or applying
+to anything, double-click **Make a cover letter.bat** or **Make a resume.bat**.
+Paste the Handshake link (the tool opens the posting to read it, nothing
+else), or press Enter and paste the job title, employer and description
+yourself, which works for postings on other sites too. The files go into
+`tailored_resumes/<job>/` and the folder opens when they're ready. The letter's
+`.txt` copy is there for pasting into a web form.
+
+From the command line:
+
+```bash
+python make_documents.py letter --url https://app.joinhandshake.com/job-search/11407841
+```
+
+`letter`, `resume` or `both` (the default); `--text posting.txt --title ... --employer ...`
+instead of `--url`; `--no-ai` to skip Claude.
+
 ### What gets submitted and what doesn't
 
 Handshake's application form has one section per document, such as "Attach your
@@ -570,6 +589,8 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `majors.py` | Loads the majors and asks which one you want. |
 | `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
+| `make_documents.py` | A resume or cover letter for one posting, without searching or applying. |
+| `Make a cover letter.bat`, `Make a resume.bat` | Double-click versions of `make_documents.py`. |
 | `cover_letter.py` | Cover letters adapted from your baseline letter, fact checked, as a one-page PDF. |
 | `prompts.py` | Asking a question at the keyboard without waiting for ever. |
 | `list_server.py` | Serves the apply-yourself list locally so Remove updates the saved list. |

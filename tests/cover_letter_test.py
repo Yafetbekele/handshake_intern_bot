@@ -28,6 +28,11 @@ else:
     FAKE.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{_fake}" "$@"\n', encoding="utf-8")
     FAKE.chmod(0o755)
 os.environ["HSBOT_CLAUDE"] = str(FAKE)
+# Never the student's real profile, letter or tailored resumes.
+os.environ["HSBOT_PROFILE"] = str(HERE / "sample_profile.json")
+os.environ["HSBOT_TAILORED_DIR"] = str(WORK / "tailored")
+os.environ["HSBOT_COVER_BASE"] = str(WORK / "no_base.txt")
+os.environ["HSBOT_DATA_DIR"] = str(WORK / "data")
 
 import cover_letter  # noqa: E402
 
@@ -149,6 +154,25 @@ try:
         profile_path=PROFILE_PATH, base_path=WORK / "no_base.txt", out_dir=WORK / "out",
     )
     check("another employer gets its own letter", other.path != result.path and other.path.parent.name.startswith("2002-"))
+
+    print("=" * 70)
+    print("4. MAKING DOCUMENTS ON THEIR OWN")
+    print("=" * 70)
+    import make_documents
+
+    posting = WORK / "posting.txt"
+    posting.write_text(JOB, encoding="utf-8")
+    code = make_documents.main(["letter", "--text", str(posting), "--title", "Backend Intern",
+                                "--employer", "Delta Systems", "--no-ai"])
+    folder = WORK / "tailored" / "backend-intern-delta-systems"
+    check("letter-only run succeeds", code == 0)
+    check("writes only the letter", (folder / "Jane_Doe_Cover_Letter.pdf").exists()
+          and not (folder / "Jane_Doe_Resume.pdf").exists(), str(sorted(p.name for p in folder.glob("*"))))
+    code = make_documents.main(["resume", "--text", str(posting), "--title", "Backend Intern",
+                                "--employer", "Delta Systems", "--no-ai"])
+    check("resume-only run adds the resume", code == 0 and (folder / "Jane_Doe_Resume.pdf").exists())
+    check("the posting link's id is found", make_documents.job_id_from(
+        "https://app.joinhandshake.com/job-search/11407841?query=x&page=1") == "11407841")
 finally:
     shutil.rmtree(WORK, ignore_errors=True)
 
