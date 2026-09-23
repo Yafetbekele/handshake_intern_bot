@@ -589,6 +589,17 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        # A bot check that clears after a few seconds, like a student passing it by hand.
+        if path == "/passable/postings":
+            query = urlencode({k: v[0] for k, v in params.items()})
+            self._send(
+                "<html><head><title>Just a moment...</title></head>"
+                "<body><p>Verify you are human</p>"
+                f"<script>setTimeout(function () {{ location.href = '/job-search?{query}'; }}, 4000);</script>"
+                "</body></html>"
+            )
+            return
+
         if path == "/explore":
             self._redirect("/home")
             return

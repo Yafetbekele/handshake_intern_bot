@@ -49,6 +49,18 @@ except ImportError:  # pragma: no cover - dependency hint
     class PlaywrightTimeout(Exception):  # type: ignore[no-redef]
         """Stand-in so except clauses stay valid without Playwright."""
 
+def chime() -> None:
+    """A short sound to call the student over to the browser window."""
+    try:
+        import winsound
+
+        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        return
+    except Exception:
+        pass
+    print("\a", end="", flush=True)
+
+
 SECURITY_CHECK_MESSAGE = (
     "\nHandshake is showing a security check that blocks automated browsers.\n"
     "The assistant stops here rather than trying to get around it.\n"
@@ -602,8 +614,46 @@ class HandshakeSession:
         )
 
     def stop_if_security_check(self) -> None:
-        if self.security_check_showing():
+        """Pause for the student when Handshake shows its security check.
+
+        The tool never answers the check itself. In a visible browser it chimes,
+        brings the window forward and waits for the student to pass it by hand,
+        then carries on. If nobody does within the wait, or the browser is
+        hidden, the run stops.
+        """
+        if not self.security_check_showing():
+            return
+        wait = max(120.0, float(self.config.get("security_check_wait", 300)))
+        if self.config.get("headless"):  # nobody can see the window to pass it
             raise SystemExit(SECURITY_CHECK_MESSAGE)
+        assert self.page is not None
+        print(
+            "\n  Handshake is showing a security check."
+            f"\n  Pass it yourself in the browser window; the run waits up to {round(wait / 60)} minutes"
+            " and continues on its own once you're through."
+        )
+        try:
+            self.page.bring_to_front()
+        except Exception:
+            pass
+        started = time.monotonic()
+        next_chime = started
+        while time.monotonic() - started < wait:
+            if time.monotonic() >= next_chime:
+                chime()
+                next_chime = time.monotonic() + 30
+            try:
+                self.page.wait_for_timeout(2000)
+            except Exception:
+                break
+            try:
+                if not self.security_check_showing():
+                    print("  Security check passed. Continuing.")
+                    self._settle(2000)
+                    return
+            except Exception:
+                pass  # the page is mid-reload after the check; look again
+        raise SystemExit(SECURITY_CHECK_MESSAGE + f"\n(No one passed it within {round(wait / 60)} minutes.)")
 
     # ---------------------------------------------------------------- login
 

@@ -519,8 +519,14 @@ changes needed.
 The tool tells you plainly when something outside its control stops it:
 
 - **"Handshake is showing a security check."** Handshake's bot protection
-  stepped in. The tool stops rather than trying to get around it. Try again
-  later, or apply in your normal browser.
+  (a Cloudflare "Just a moment..." page) stepped in. The tool never answers it
+  itself. It plays a sound every 30 seconds, brings the browser window to the
+  front and waits up to 5 minutes (never less than 2) for you to pass it by
+  hand, then carries on where it was. If nobody does, the run stops. Change
+  the wait with `"security_check_wait": 600` (seconds) in `config.json`. With
+  a hidden browser (`--headless`) it stops right away, since there's no window
+  to pass it in. Seeing this often means Handshake has noticed the volume, so
+  run smaller batches.
 - **"Could not find Handshake's job search box"** or **"redirected the job
   search".** Handshake changed its search page.
 

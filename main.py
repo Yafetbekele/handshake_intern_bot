@@ -283,6 +283,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "write_cover_letters": True,
     "answer_questions": True,
     "answer_timeout": 60,
+    "security_check_wait": 300,
     "use_ai_for_tailoring": True,
     "profile_path": "",
     "headless": False,

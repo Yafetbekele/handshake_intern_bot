@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -253,6 +254,29 @@ try:
 
             session.page.goto(BASE + "/stu/postings")
             check("normal pages are not mistaken for a check", not session.security_check_showing())
+
+            # With a visible browser the run waits for the student to pass the check.
+            import handshake as _hs
+
+            chimes: list[int] = []
+            real_chime = _hs.chime
+            _hs.chime = lambda: chimes.append(1)
+            session.config.update({"headless": False, "security_check_wait": 60})
+            session.page.goto(BASE + "/passable/postings?query=anything&page=1")
+            started = time.monotonic()
+            try:
+                session.stop_if_security_check()
+                passed = True
+            except SystemExit:
+                passed = False
+            waited = time.monotonic() - started
+            print(f"  waited {waited:.0f}s for the check to be passed")
+            check("the run waits for the student instead of stopping", passed)
+            check("it carries on once the check is gone", passed and not session.security_check_showing())
+            check("a sound called the student over", len(chimes) >= 1, str(len(chimes)))
+            _hs.chime = real_chime
+            session.config.update({"headless": True})
+            session.config.pop("security_check_wait", None)
 
             print()
             print("=" * 70)
