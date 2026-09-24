@@ -1,7 +1,7 @@
 @echo off
 setlocal
-title Internships found elsewhere
-cd /d "%~dp0"
+title Make a resume
+cd /d "%~dp0.."
 
 set "PY="
 where py >nul 2>nul && set "PY=py -3"
@@ -14,7 +14,7 @@ if not defined PY (
     exit /b 1
 )
 
-%PY% find_elsewhere.py
+%PY% make_documents.py resume
 echo.
 echo Press any key to close this window.
 pause >nul

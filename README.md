@@ -22,7 +22,7 @@ have seen that the matches it picks are ones you would have picked yourself.
 
 ## Easiest way to start: double-click
 
-Double-click **Start Internship Assistant.bat** in this folder. No terminal
+Double-click **Start Internship Assistant.bat** in the **Programs** folder. No terminal
 commands are needed.
 
 1. The first time, it offers to download what it needs. This takes a few
@@ -616,8 +616,8 @@ fake Claude program, so they never read your profile or use your Claude plan.
 
 | File | Role |
 | --- | --- |
-| `Start Internship Assistant.bat` | The double-click starting point. |
-| `Open apply-yourself list.bat` | Opens the apply-yourself list with a working Remove button. |
+| `Programs/Start Internship Assistant.bat` | The double-click starting point. |
+| `Programs/Open apply-yourself list.bat` | Opens the apply-yourself list with a working Remove button. |
 | `launcher.py` | The window behind the double-click, plus first-time setup. |
 | `main.py` | Command line interface and the run loop. |
 | `handshake.py` | Playwright driver: login, search, job pages, submission. |
@@ -626,9 +626,9 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
 | `rank_all.py`, `deep_rank.py`, `posting_cache.py` | Reads, saves and ranks every employer-site posting. |
-| `find_elsewhere.py`, `elsewhere_companies.json`, `Find internships elsewhere.bat` | The daily finder for internships on company career sites. |
+| `find_elsewhere.py`, `elsewhere_companies.json`, `Programs/Find internships elsewhere.bat` | The daily finder for internships on company career sites. |
 | `make_documents.py` | A resume or cover letter for one posting, without searching or applying. |
-| `Make a cover letter.bat`, `Make a resume.bat` | Double-click versions of `make_documents.py`. |
+| `Programs/Make a cover letter.bat`, `Programs/Make a resume.bat` | Double-click versions of `make_documents.py`. |
 | `cover_letter.py` | Cover letters adapted from your baseline letter, fact checked, as a one-page PDF. |
 | `prompts.py` | Asking a question at the keyboard without waiting for ever. |
 | `list_server.py` | Serves the apply-yourself list locally so Remove updates the saved list. |

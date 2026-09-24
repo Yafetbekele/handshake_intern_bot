@@ -1,7 +1,7 @@
 @echo off
 setlocal
 title Make a cover letter
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 set "PY="
 where py >nul 2>nul && set "PY=py -3"

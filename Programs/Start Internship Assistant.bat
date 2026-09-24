@@ -1,7 +1,7 @@
 @echo off
 setlocal
 title Handshake Internship Assistant
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 rem Prefer the official Python launcher, then a python.exe on PATH.
 set "PY="
