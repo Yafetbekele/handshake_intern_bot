@@ -194,6 +194,36 @@ checkbox under Optional, or `--no-cover-letters`.
   `cover_letter.txt` and `cover_letter.json` (what was cut and why).
 - In a practice run the letter is written but not uploaded.
 
+### Every employer-site posting, ranked
+
+Most engineering internships found on Handshake apply on the employer's own
+site. `python rank_all.py` reads each of them once (read only; saved in
+`data/postings/` so they're never read again) and ranks them all in
+`all_ranked.html` in the apply-yourself folder: best fit first, at most 2 per
+company, expired ones left out and ones closing within 10 days in red.
+
+The fit score (`deep_rank.py`) is out of 100: skills 30% (your skills in the
+posting, rarer ones counting more), kind of job 22% (by your target roles),
+eligibility 18% (undergraduate wording, class year; PhD, years of experience,
+active clearance or a GPA above yours count against), major match 10%, summer
+timing 8%, pay 6%, location 6%. Clearly wrong jobs are scaled down so keywords
+can't rescue them. `python rank_all.py --no-fetch` re-ranks without reading.
+
+### Internships that aren't on Handshake
+
+Double-click **Find internships elsewhere.bat** (or `python find_elsewhere.py`),
+say every morning. It reads the public career boards of the companies in
+`elsewhere_companies.json` (about 50 hardware, embedded, chip, robotics, space
+and defense companies on Greenhouse, Lever and Ashby), keeps US summer
+internships that fit your major, drops anything already found on Handshake,
+grades the rest with the same fit score, and writes `found_elsewhere.html` in
+the apply-yourself folder. Postings new since the last run are highlighted.
+It takes about 30 seconds and never opens Handshake.
+
+To add a company, find its careers page's hiring system in the address
+(`boards.greenhouse.io/<board>`, `jobs.lever.co/<board>` or
+`jobs.ashbyhq.com/<board>`) and add a line to `elsewhere_companies.json`.
+
 ### Just a resume or a letter, for one posting
 
 To get a tailored resume or cover letter without running a search or applying
@@ -595,6 +625,8 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `majors.py` | Loads the majors and asks which one you want. |
 | `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
+| `rank_all.py`, `deep_rank.py`, `posting_cache.py` | Reads, saves and ranks every employer-site posting. |
+| `find_elsewhere.py`, `elsewhere_companies.json`, `Find internships elsewhere.bat` | The daily finder for internships on company career sites. |
 | `make_documents.py` | A resume or cover letter for one posting, without searching or applying. |
 | `Make a cover letter.bat`, `Make a resume.bat` | Double-click versions of `make_documents.py`. |
 | `cover_letter.py` | Cover letters adapted from your baseline letter, fact checked, as a one-page PDF. |

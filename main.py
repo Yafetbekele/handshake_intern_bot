@@ -30,6 +30,7 @@ from typing import Any
 import cover_letter
 import majors
 import matcher
+import posting_cache
 import prompts
 import ranking
 import resume_parser
@@ -422,6 +423,7 @@ def gather_candidates(
 
     for index, job_id in enumerate(fresh, start=1):
         job = session.load_job(job_id)
+        posting_cache.save(job)  # kept for ranking later
         prefix = f"[{index}/{len(fresh)}]"
 
         if job.error:

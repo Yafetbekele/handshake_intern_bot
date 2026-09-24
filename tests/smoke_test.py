@@ -5,6 +5,7 @@ Run from the project root:
 """
 
 import sys
+from datetime import date
 import tempfile
 from pathlib import Path
 
@@ -85,6 +86,52 @@ with tempfile.TemporaryDirectory() as _tmp2:
     assert listing.is_removed(kept_ids[0]), "a removed posting is never added back"
     print(f"  10 of 20 added, weakest left off, removed ones stay off")
     print("  OK")
+
+print("=" * 70)
+print("0d. RANKING EVERYTHING AND THE DAILY FINDER")
+print("=" * 70)
+import deep_rank
+import find_elsewhere
+
+assert find_elsewhere.is_internship_title("2027 Electrical Engineer Intern")
+assert find_elsewhere.is_internship_title("Firmware Co-op (Summer 2027)")
+assert not find_elsewhere.is_internship_title("Internal Communications Manager")
+assert not find_elsewhere.is_internship_title("International Program Manager")
+assert deep_rank.company_key("TikTok Inc.") == deep_rank.company_key("TikTok")
+assert deep_rank.title_key("ASIC Design Engineer Intern (Video Silicon IP) - 2027 Start") ==     deep_rank.title_key("ASIC Design Engineer Intern (Audio IP) - Summer 2027")
+assert deep_rank.family_of("FPGA Engineering Intern") == "chip design"
+assert deep_rank.family_of("Social Media Intern") == "non-engineering"
+keys = {(deep_rank.company_key("Anduril Industries"), deep_rank.title_key("Electrical Engineer Intern"))}
+assert find_elsewhere.on_handshake({"employer": "Anduril Industries", "title": "2027 Electrical Engineer Intern"}, keys)
+assert not find_elsewhere.on_handshake({"employer": "Neuralink", "title": "Electrical Engineer Intern"}, keys)
+
+sample_profile = {"preferences": {"target_roles": ["Embedded systems"]}, "education": [{"gpa": "3.5"}]}
+pool = [
+    {"job_id": str(i), "title": title, "employer": employer, "location": "Onsite, based in Austin, TX", "url": "",
+     "score": 1.0, "description": body}
+    for i, (title, employer, body) in enumerate([
+        ("Embedded Firmware Intern", "Acme", "Summer 2027. Undergraduate students. Verilog, FPGA, C++ firmware. $40/hr"),
+        ("Embedded Software Intern", "Acme", "Summer 2027. Undergraduate. C++ embedded Linux. $35/hr"),
+        ("Firmware Intern", "Acme", "Summer 2027. C++. $30/hr"),
+        ("Hardware Intern", "Beta", "Summer 2027. Must be pursuing a PhD. 5+ years of experience."),
+        ("Social Media Intern", "Gamma", "Summer 2027. Instagram and TikTok content."),
+        ("FPGA Intern", "Delta", "Apply by January 5, 2020. Summer 2027. Verilog."),
+        ("Chip Design Intern", "Eps", "Summer 2027. Minimum GPA of 3.8 required. Verilog."),
+    ])
+]
+graded = deep_rank.grade_all(pool, sample_profile, ["verilog", "fpga", "cpp", "embedded", "firmware", "linux"],
+                             today=date(2026, 9, 23))
+titles = [g.title for g in graded]
+assert "FPGA Intern" not in titles, "expired postings are dropped"
+assert titles[0] == "Embedded Firmware Intern", titles
+assert titles.index("Hardware Intern") > titles.index("Firmware Intern"), "PhD-only ranks low"
+assert titles[-1] in ("Social Media Intern", "Hardware Intern"), titles
+assert any("GPA" in f for g in graded if g.title == "Chip Design Intern" for f in g.flags)
+spread = deep_rank.spread(graded, 2)
+assert sum(1 for g in spread if g.employer == "Acme") == 2, "at most 2 per company"
+assert next(g for g in spread if g.employer == "Acme").more_at_company == 1
+print("  grading, expired postings, company limit and the finder's filters")
+print("  OK")
 
 print("=" * 70)
 print("0b. APPLY-YOURSELF FIT SCORE")
