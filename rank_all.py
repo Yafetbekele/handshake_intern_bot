@@ -24,7 +24,9 @@ import time
 from html import escape
 from pathlib import Path
 
+import applied_myself
 import deep_rank
+import page_bits
 import posting_cache
 import resume_parser
 import tailor
@@ -110,6 +112,7 @@ def write_outputs(ranked: list[deep_rank.Graded], folder: Path, total: int, per_
             f"<td class='num'>{escape(g.pay)}</td>"
             f"<td class='num{soon}'>{escape(g.deadline)}</td>"
             f"<td>{escape(g.family)}</td>"
+            f"<td>{page_bits.button(g.job_id, g.title, g.employer, g.url, 'ranked')}</td>"
             "</tr>"
         )
     weights = ", ".join(f"{k} {round(w * 100)}%" for k, w in deep_rank.WEIGHTS.items())
@@ -136,16 +139,19 @@ def write_outputs(ranked: list[deep_rank.Graded], folder: Path, total: int, per_
   .score {{ font-weight:700; cursor:help; }}
   .why, .more {{ color:var(--muted); font-size:13px; margin-top:2px; }}
   .soon {{ color:var(--warn); font-weight:600; }}
+{page_bits.CSS}
 </style></head>
 <body><main>
+{page_bits.nav("/ranked")}
 <h1>All internships, ranked</h1>
 <p>The best {len(ranked)} of {total} postings that apply on the employer's own site, best fit first, at most {per_company} per company.
 Hover a score for its parts ({escape(weights)}). Deadlines in red close within 10 days.</p>
 <div class="bar"><input id="filter" placeholder="Filter by title, employer, city..." aria-label="Filter"></div>
+{page_bits.tools()}
 <div class="wrap"><table>
-<thead><tr><th>#</th><th>Fit</th><th>Internship</th><th>Employer</th><th>Location</th><th>Pay</th><th>Deadline</th><th>Kind</th></tr></thead>
+<thead><tr><th>#</th><th>Fit</th><th>Internship</th><th>Employer</th><th>Location</th><th>Pay</th><th>Deadline</th><th>Kind</th><th></th></tr></thead>
 <tbody>
-{chr(10).join(rows) or "<tr><td colspan='8'>Nothing to rank yet.</td></tr>"}
+{chr(10).join(rows) or "<tr><td colspan='9'>Nothing to rank yet.</td></tr>"}
 </tbody></table></div>
 </main>
 <script>
@@ -156,6 +162,7 @@ document.getElementById('filter').addEventListener('input', function () {{
   }});
 }});
 </script>
+{page_bits.SCRIPT}
 </body></html>
 """
     out = folder / "all_ranked.html"
@@ -173,7 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     posting_cache.import_tailored(tailor.OUT_DIR)
     ledger = employer_site_postings()
     listing = manual_list()
-    ids = [i for i in ledger if not listing.is_removed(i)]
+    done = applied_myself.ids()
+    ids = [i for i in ledger if not listing.is_removed(i) and i not in done]
     if not args.no_fetch:
         fetch_missing(ids)
 

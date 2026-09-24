@@ -224,6 +224,17 @@ To add a company, find its careers page's hiring system in the address
 (`boards.greenhouse.io/<board>`, `jobs.lever.co/<board>` or
 `jobs.ashbyhq.com/<board>`) and add a line to `elsewhere_companies.json`.
 
+### Marking postings you applied to
+
+Open the lists with **Open apply-yourself list** (in Programs or on the
+desktop). Links at the top switch between the apply-yourself list, the full
+ranked list and the internships found elsewhere. On the two ranked pages, click
+**Applied** once you've applied to a posting: it's hidden for good, left out of
+later rankings and daily finds, and taken off the apply-yourself list. **Show
+applied** and **Undo** bring one back. Marks are kept in
+`data/applied_myself.json`. Opened straight from the folder instead, the
+button only hides the row in that browser.
+
 ### Just a resume or a letter, for one posting
 
 To get a tailored resume or cover letter without running a search or applying
@@ -631,6 +642,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `Programs/Make a cover letter.bat`, `Programs/Make a resume.bat` | Double-click versions of `make_documents.py`. |
 | `cover_letter.py` | Cover letters adapted from your baseline letter, fact checked, as a one-page PDF. |
 | `prompts.py` | Asking a question at the keyboard without waiting for ever. |
+| `applied_myself.py`, `page_bits.py` | The Applied button on the ranked pages and where its marks are kept. |
 | `list_server.py` | Serves the apply-yourself list locally so Remove updates the saved list. |
 | `storage.py` | Application ledger, apply-yourself list and CSV export. |
 | `ranking.py` | Fit score that orders the apply-yourself list. |

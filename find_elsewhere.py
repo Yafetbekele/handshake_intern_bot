@@ -32,7 +32,9 @@ from datetime import date, datetime
 from html import escape
 from pathlib import Path
 
+import applied_myself
 import deep_rank
+import page_bits
 import majors
 import matcher
 import posting_cache
@@ -229,7 +231,8 @@ def write_page(ranked: list[deep_rank.Graded], new_ids: set[str], folder: Path, 
             f"<a href='{escape(g.url, quote=True)}' target='_blank' rel='noopener'>{escape(g.title)}</a>"
             f"<div class='why'>{escape('; '.join(notes))}</div></td>"
             f"<td>{escape(g.employer)}{more}</td><td>{escape(g.location)}</td>"
-            f"<td class='num'>{escape(g.pay)}</td><td>{escape(g.family)}</td></tr>"
+            f"<td class='num'>{escape(g.pay)}</td><td>{escape(g.family)}</td>"
+            f"<td>{page_bits.button(g.job_id, g.title, g.employer, g.url, 'elsewhere')}</td></tr>"
         )
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -252,19 +255,24 @@ def write_page(ranked: list[deep_rank.Graded], new_ids: set[str], folder: Path, 
   .why {{ color:var(--muted); font-size:13px; margin-top:2px; }}
   tr.new td {{ background:var(--new); }}
   .badge {{ font-size:11px; font-weight:700; color:var(--badge); border:1px solid currentColor; border-radius:4px; padding:0 4px; }}
+{page_bits.CSS}
 </style></head>
 <body><main>
+{page_bits.nav("/elsewhere")}
 <h1>Internships found elsewhere</h1>
 <p>Checked {stats['companies']} company career sites on {date.today().strftime('%B %d, %Y').replace(' 0', ' ')}.
 {stats['internships']} internship postings; {stats['kept']} fit a summer Computer Engineering search and aren't on Handshake.
 Best fit first, at most 2 per company. <strong>{len(new_ids)} new since the last run</strong>, highlighted.
 Hover a score for its parts. Links go to each company's own application page.</p>
+{page_bits.tools()}
 <div class="wrap"><table>
-<thead><tr><th>#</th><th>Fit</th><th>Internship</th><th>Company</th><th>Location</th><th>Pay</th><th>Kind</th></tr></thead>
+<thead><tr><th>#</th><th>Fit</th><th>Internship</th><th>Company</th><th>Location</th><th>Pay</th><th>Kind</th><th></th></tr></thead>
 <tbody>
-{chr(10).join(rows) or "<tr><td colspan='7'>Nothing matched today.</td></tr>"}
+{chr(10).join(rows) or "<tr><td colspan='8'>Nothing matched today.</td></tr>"}
 </tbody></table></div>
-</main></body></html>
+</main>
+{page_bits.SCRIPT}
+</body></html>
 """
     out = folder / "found_elsewhere.html"
     out.write_text(page, encoding="utf-8")
@@ -296,8 +304,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  couldn't read {problem}")
 
     keys = handshake_keys()
+    done = applied_myself.ids()
     kept, dropped = [], {}
     for posting in found:
+        if posting["id"] in done:
+            dropped["you applied"] = dropped.get("you applied", 0) + 1
+            continue
         if on_handshake(posting, keys):
             dropped["also on Handshake"] = dropped.get("also on Handshake", 0) + 1
             continue

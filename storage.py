@@ -337,6 +337,11 @@ def _manual_list_html(
             "</tr>"
         )
     table = "\n".join(body) or "<tr><td colspan='9'>Nothing here yet.</td></tr>"
+    nav = ""
+    if served:
+        nav = ("<nav style='display:flex;gap:14px;margin:0 0 12px;font-size:14px'>"
+               "<a href='/' style='color:var(--fg)'>Apply-yourself list</a>"
+               "<a href='/ranked'>All internships, ranked</a><a href='/elsewhere'>Found elsewhere</a></nav>")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -369,6 +374,7 @@ def _manual_list_html(
   body.show-removed tr.removed {{ display:table-row; opacity:.5; }}
 </style></head>
 <body><main>
+{nav}
 <h1>Internships to apply to yourself</h1>
 <p>{len(rows)} good matches the assistant could not apply to for you, best fit first (at most {limit}). Fit is out of 100: the major match, overlap with your resume, how open it is to undergraduates, and the title. Each link opens the posting on Handshake.</p>
 <p class="note" id="note" hidden></p>

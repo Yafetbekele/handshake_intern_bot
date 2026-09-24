@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
 
+import applied_myself
 from storage import ManualList
 
 IDLE_AFTER_OPEN = 180.0  # seconds without a ping once the page has loaded
@@ -71,6 +72,22 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         self.server.last_seen = time.monotonic()
         path = self.path.split("?", 1)[0]
+        pages = {"/ranked": "all_ranked.html", "/elsewhere": "found_elsewhere.html"}
+        if path in pages:
+            self.server.opened = True
+            page = self.server.folder / pages[path]
+            if page.is_file():
+                self._send(200, page.read_bytes(), "text/html; charset=utf-8")
+            else:
+                self._send(404, b"Not made yet. Run rank_all.py or find_elsewhere.py first.")
+            return
+        if path == "/api/applied":
+            if not self._trusted():
+                self._send(403, b"Forbidden")
+                return
+            body = json.dumps(sorted(applied_myself.ids())).encode("utf-8")
+            self._send(200, body, "application/json")
+            return
         if path in ("/", "/apply_yourself.html"):
             self.server.opened = True
             with self.server.lock:
@@ -89,20 +106,43 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         self.server.last_seen = time.monotonic()
+        # Read the whole request first; answering early makes Windows reset the connection.
+        try:
+            raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192))
+        except (ValueError, OSError):
+            raw = b""
+        try:
+            data = json.loads(raw or b"{}")
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
         if not self._trusted():
             self._send(403, b"Forbidden")
             return
         if self.path == "/api/ping":
             self._send(204)
             return
+        if self.path == "/api/applied":
+            job_id = str(data.get("id", "")).strip()
+            if not job_id:
+                self._send(400, b"Missing id")
+                return
+            with self.server.lock:
+                if data.get("undo"):
+                    applied_myself.unmark(job_id)
+                else:
+                    applied_myself.mark(job_id, data)
+                    listing = self.server.listing()
+                    if listing.get(job_id) is not None and not listing.is_removed(job_id):
+                        listing.dismiss(job_id)  # applied, so off the apply-yourself list too
+                        listing.save()
+            self._send(200, b'{"ok": true}', "application/json")
+            return
         if self.path not in ("/api/remove", "/api/restore"):
             self._send(404, b"Not found")
             return
-        try:
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
-            job_id = str(json.loads(self.rfile.read(length) or b"{}").get("id", ""))
-        except (ValueError, AttributeError):
-            job_id = ""
+        job_id = str(data.get("id", ""))
         if not job_id:
             self._send(400, b"Missing id")
             return

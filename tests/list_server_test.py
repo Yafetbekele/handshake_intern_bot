@@ -17,8 +17,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import list_server
-from storage import ManualList
+import os  # noqa: E402
+
+# Marks go to a temporary data folder, never the student's real one.
+os.environ["HSBOT_DATA_DIR"] = tempfile.mkdtemp(prefix="hsbot_listdata_")
+
+import applied_myself  # noqa: E402
+import list_server  # noqa: E402
+from storage import ManualList  # noqa: E402
 
 failures: list[str] = []
 
@@ -113,6 +119,40 @@ with tempfile.TemporaryDirectory() as tmp:
         plain = browser.new_page()
         plain.goto((folder / "apply_yourself.html").as_uri())
         check("plain file explains Remove only hides", "only hides" in plain.locator("#note").inner_text())
+
+        print("=" * 70)
+        print("2b. MARKING APPLIED ON THE RANKED PAGE")
+        print("=" * 70)
+        import deep_rank
+        import rank_all
+
+        ranked = [
+            deep_rank.Graded(job_id=i, title=t, employer=e, location="Remote", url=f"https://example.test/{i}",
+                             score=s, parts={k: 0.5 for k in deep_rank.WEIGHTS}, family="embedded", matched=[])
+            for i, t, e, s in [("1", "FPGA Intern", "Chips", 90), ("7", "Robotics Intern", "Bots", 80)]
+        ]
+        rank_all.write_outputs(ranked, folder, 2, 2)
+        check("apply-yourself page links to the ranked pages", page.locator("a[href='/ranked']").count() == 1)
+        page.goto(url + "ranked")
+        check("ranked page served with its buttons", page.locator("button.applied").count() == 2)
+        page.locator("button.applied[data-id='1']").click()
+        page.wait_for_function("document.querySelector(\"button.applied[data-id='1']\").closest('tr').classList.contains('done')")
+        check("marked applied is saved", "1" in applied_myself.ids(), str(applied_myself.ids()))
+        check("the row is hidden", page.locator("button.applied[data-id='1']").is_hidden())
+        check("and it came off the apply-yourself list", ManualList(folder).is_removed("1"))
+        page.reload()
+        page.wait_for_timeout(600)
+        check("still hidden after reopening", page.locator("button.applied[data-id='1']").is_hidden())
+        page.locator("#done-toggle").click()
+        page.locator("button.applied[data-id='1']").click()
+        page.wait_for_timeout(600)
+        check("Undo takes the mark back", "1" not in applied_myself.ids())
+        page.locator("button.applied[data-id='7']").click()
+        page.wait_for_timeout(600)
+        check("a posting only on the ranked page can be marked too", "7" in applied_myself.ids())
+        check("a stranger can't read or change the marks",
+              post(url + "api/applied", {"id": "9"}, {"Content-Type": "application/json"}) == 403
+              and "9" not in applied_myself.ids())
         browser.close()
 
     print("=" * 70)
