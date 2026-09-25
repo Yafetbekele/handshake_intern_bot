@@ -39,6 +39,7 @@ import majors
 import matcher
 import posting_cache
 import tailor
+import web_discovery
 from main import DATA_DIR, manual_list
 
 HERE = Path(__file__).resolve().parent
@@ -287,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-company", type=int, default=2)
     parser.add_argument("--anywhere", action="store_true", help="include postings outside the US")
     parser.add_argument("--no-open", action="store_true", help="don't open the page when done")
+    parser.add_argument("--searches", type=int, default=4,
+                        help="web searches a day, different every day (default 4; 0 turns them off)")
     args = parser.parse_args(argv)
 
     try:
@@ -295,13 +298,34 @@ def main(argv: list[str] | None = None) -> int:
         settings = {}
     major = majors.resolve(args.major or settings.get("major") or "Computer Engineering")
     companies = json.loads(COMPANIES_PATH.read_text(encoding="utf-8"))["companies"]
+    day = date.today()
+
+    # Grow the company list: boards on today's community list, and from past web searches.
+    listing_text = web_discovery.community_list(day)
+    known = {(c["ats"], c["board"].lower()) for c in companies}
+    added = web_discovery.add_boards(web_discovery.boards_in(listing_text), known, "community list", day)
+    web_found: list[dict] = []
+    if args.searches > 0 and tailor.find_claude():
+        print(f"Searching the web ({args.searches} searches, different every day)...")
+        names = [c["name"] for c in companies] + [b["name"] for b in web_discovery.load_discovered().values()]
+        web_found, _, web_boards = web_discovery.web_postings(day, args.searches, names)
+        added += web_discovery.add_boards(web_boards, known, "web search", day)
+        print(f"  {len(web_found)} postings from web searches (kept for two weeks)")
+    elif args.searches > 0:
+        print("Claude Code isn't set up, so there are no web searches today.")
+    discovered = [b for b in web_discovery.load_discovered().values() if (b["ats"], b["board"].lower()) not in known]
+    companies = companies + discovered
+    if added:
+        print(f"  {added} new company career sites added to the daily check")
 
     started = time.monotonic()
     print(f"Checking {len(companies)} company career sites for {major.name} internships...")
     found, problems = gather(companies)
     print(f"  {len(found)} internship postings found in {time.monotonic() - started:.0f}s")
-    for problem in problems:
-        print(f"  couldn't read {problem}")
+    if problems:
+        print(f"  {len(problems)} sites couldn't be read (moved or closed boards are skipped)")
+    board_ids = {p["url"] for p in found}
+    found += [p for p in web_found if p["url"] not in board_ids]
 
     keys = handshake_keys()
     done = applied_myself.ids()
@@ -324,6 +348,16 @@ def main(argv: list[str] | None = None) -> int:
     profile = tailor.load_profile(tailor.PROFILE_PATH) if tailor.PROFILE_PATH.exists() else {}
     terms = deep_rank.student_terms(None, tailor.PROFILE_PATH)
     graded = deep_rank.grade_all([dict(p, job_id=p["id"]) for p in kept], profile, terms)
+    # Lesser-known postings rank higher: widely shared ones get a small penalty.
+    is_popular = web_discovery.popular_marker(listing_text)
+    sources = {p["id"]: p.get("source", "") for p in kept}
+    for g in graded:
+        if is_popular(g.url, g.employer, g.title):
+            g.score = round(g.score * 0.9, 1)
+            g.flags.append("on a popular list")
+        if sources.get(g.job_id) == "web search":
+            g.flags.append("found by web search")
+    graded.sort(key=lambda g: -g.score)
     ranked = deep_rank.spread(graded, args.per_company)
 
     seen = load_seen()

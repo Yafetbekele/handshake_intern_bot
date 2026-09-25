@@ -130,7 +130,37 @@ assert any("GPA" in f for g in graded if g.title == "Chip Design Intern" for f i
 spread = deep_rank.spread(graded, 2)
 assert sum(1 for g in spread if g.employer == "Acme") == 2, "at most 2 per company"
 assert next(g for g in spread if g.employer == "Acme").more_at_company == 1
-print("  grading, expired postings, company limit and the finder's filters")
+
+import os as _os
+import web_discovery
+
+_old_data = _os.environ.get("HSBOT_DATA_DIR")
+_os.environ["HSBOT_DATA_DIR"] = tempfile.mkdtemp(prefix="hsbot_web_")
+day_one, day_two = date(2026, 9, 24), date(2026, 9, 25)
+assert web_discovery.daily_searches(day_one) == web_discovery.daily_searches(day_one), "same day, same searches"
+assert web_discovery.daily_searches(day_one) != web_discovery.daily_searches(day_two), "a new day, new searches"
+assert all(any(p in web_discovery.daily_searches(d)[0] for p in web_discovery.PLACES[:5])
+           for d in (day_one, day_two, date(2026, 10, 3))), "the first search stays near home"
+assert web_discovery.boards_in("https://boards.greenhouse.io/acme/jobs/123 and https://jobs.lever.co/beta-co/abc "
+                               "https://jobs.ashbyhq.com/gamma?x=1") == {
+    ("greenhouse", "acme"), ("lever", "beta-co"), ("ashby", "gamma")}
+assert web_discovery._json_list('```json\n[{"company": "A", "url": "https://a.test"}]\n```') == [
+    {"company": "A", "url": "https://a.test"}]
+assert web_discovery._json_list("no results") == []
+assert web_discovery.fetch_page("https://www.linkedin.com/jobs/1")[0] is False, "job boards are skipped"
+assert web_discovery.fetch_page("javascript:alert(1)")[0] is False
+popular = web_discovery.popular_marker("| Acme | [Apply](https://boards.greenhouse.io/acme/jobs/123) |")
+assert popular("https://boards.greenhouse.io/acme/jobs/123", "", "")
+assert not popular("https://boards.greenhouse.io/other/jobs/9", "", "")
+assert web_discovery.add_boards({("greenhouse", "newco")}, {("greenhouse", "known")}, "test", day_one) == 1
+assert web_discovery.add_boards({("greenhouse", "newco"), ("greenhouse", "known")}, {("greenhouse", "known")},
+                                "test", day_one) == 0, "boards are added once, known ones never"
+assert list(web_discovery.load_discovered()) == ["greenhouse:newco"]
+if _old_data is None:
+    _os.environ.pop("HSBOT_DATA_DIR", None)
+else:
+    _os.environ["HSBOT_DATA_DIR"] = _old_data
+print("  grading, expired postings, company limit, the finder's filters and daily web searches")
 print("  OK")
 
 print("=" * 70)

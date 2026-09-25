@@ -220,6 +220,23 @@ grades the rest with the same fit score, and writes `found_elsewhere.html` in
 the apply-yourself folder. Postings new since the last run are highlighted.
 It takes about 30 seconds and never opens Handshake.
 
+**It doesn't only check a fixed list.** Every morning it also:
+
+- **Searches the web, differently each day.** Four searches drawn from a
+  rotating mix of role (embedded, firmware, FPGA, test, PCB, robotics, RF,
+  power...), place (the first always near home, the rest across the US) and
+  kind of employer (small companies, startups, labs, contractors). Claude Code
+  runs them on your plan with its web search tool only: it can't open pages,
+  run anything or change files, and every link it names is checked here.
+  Handshake, Indeed, LinkedIn and similar job boards are left out. Results are
+  kept for two weeks, and a second run on the same day reuses them. Turn it
+  off with `--searches 0`, or change how many with `--searches 6`.
+- **Grows its company list.** Any company careers board seen in those results,
+  or in the large community internship list on GitHub, is added to
+  `data/discovered_boards.json` and checked every day after that.
+- **Favors lesser-known postings.** Anything that's also on that popular
+  community list is ranked a little lower and marked "on a popular list".
+
 To add a company, find its careers page's hiring system in the address
 (`boards.greenhouse.io/<board>`, `jobs.lever.co/<board>` or
 `jobs.ashbyhq.com/<board>`) and add a line to `elsewhere_companies.json`.
@@ -637,7 +654,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `majors.json` | Each major's searches and scoring presets. Edit freely. |
 | `resume_parser.py` | Resume text extraction and keyword detection. |
 | `rank_all.py`, `deep_rank.py`, `posting_cache.py` | Reads, saves and ranks every employer-site posting. |
-| `find_elsewhere.py`, `elsewhere_companies.json`, `Programs/Find internships elsewhere.bat` | The daily finder for internships on company career sites. |
+| `find_elsewhere.py`, `web_discovery.py`, `elsewhere_companies.json`, `Programs/Find internships elsewhere.bat` | The daily finder for internships on company career sites. |
 | `make_documents.py` | A resume or cover letter for one posting, without searching or applying. |
 | `Programs/Make a cover letter.bat`, `Programs/Make a resume.bat` | Double-click versions of `make_documents.py`. |
 | `cover_letter.py` | Cover letters adapted from your baseline letter, fact checked, as a one-page PDF. |
