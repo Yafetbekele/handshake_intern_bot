@@ -252,6 +252,18 @@ applied** and **Undo** bring one back. Marks are kept in
 `data/applied_myself.json`. Opened straight from the folder instead, the
 button only hides the row in that browser.
 
+### Letters for the top of a list, in one go
+
+```bash
+python letters_for_list.py --top 20
+```
+
+writes cover letters for the top 20 on Found elsewhere, skipping ones you've
+marked Applied and keeping letters already written. `--list ranked` does the
+same for the Handshake ranked list, and `--resumes` adds tailored resumes.
+"Cover letters.html" in the results folder links every letter and posting.
+Each letter is one Claude request on your plan.
+
 ### Just a resume or a letter, for one posting
 
 To get a tailored resume or cover letter without running a search or applying
@@ -655,6 +667,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `resume_parser.py` | Resume text extraction and keyword detection. |
 | `rank_all.py`, `deep_rank.py`, `posting_cache.py` | Reads, saves and ranks every employer-site posting. |
 | `find_elsewhere.py`, `web_discovery.py`, `elsewhere_companies.json`, `Programs/Find internships elsewhere.bat` | The daily finder for internships on company career sites. |
+| `letters_for_list.py` | Cover letters (and resumes) for the top of a ranked list. |
 | `make_documents.py` | A resume or cover letter for one posting, without searching or applying. |
 | `Programs/Make a cover letter.bat`, `Programs/Make a resume.bat` | Double-click versions of `make_documents.py`. |
 | `cover_letter.py` | Cover letters adapted from your baseline letter, fact checked, as a one-page PDF. |

@@ -367,6 +367,12 @@ def main(argv: list[str] | None = None) -> int:
         seen.setdefault(posting["id"], today)
     SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     SEEN_PATH.write_text(json.dumps(seen, indent=1), encoding="utf-8")
+    # The ranked postings with their full text, in order, for letters_for_list.py.
+    by_id = {p["id"]: p for p in kept}
+    (DATA_DIR / "elsewhere_ranked.json").write_text(
+        json.dumps([dict(by_id[g.job_id], score=g.score) for g in ranked if g.job_id in by_id], ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     page = write_page(ranked, new_ids, manual_list().folder,
                       {"companies": len(companies), "internships": len(found), "kept": len(kept)})
