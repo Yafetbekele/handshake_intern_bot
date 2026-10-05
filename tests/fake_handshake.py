@@ -36,6 +36,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
+# Where "Apply externally" leads. Tests point this at a local stand-in.
+EXTERNAL_APPLY_URL = "https://example.com/apply"
+
+
 NAV = (
     "<nav><a href='/home'>Home</a> <a href='/job-search'>Jobs</a> "
     "<a href='/stu/profile'>Profile</a></nav>"
@@ -437,7 +441,7 @@ def job_panel(job_id: str) -> str:
     data = JOBS[job_id]
     similar = next(i for i in ALL_IDS if i != job_id)
     external = data["button"] == "Apply externally"
-    onclick = "window.open('https://example.com/apply')" if external else "openDialog()"
+    onclick = f"window.open('{EXTERNAL_APPLY_URL}')" if external else "openDialog()"
     more = ""
     if data["more"]:
         more = (

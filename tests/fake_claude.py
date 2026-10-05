@@ -2,8 +2,9 @@
 """Stands in for the Claude Code program in tests, so no real plan usage is spent.
 
 `auth status` reports signed in. `-p` reads the prompt and answers with a
-tailoring plan for tests/sample_profile.json that mixes honest rewording with
-invented claims, which the fact checks must catch.
+tailoring plan (or a cover letter, or an answer to an application question)
+for tests/sample_profile.json that mixes honest rewording with invented
+claims, which the fact checks must catch.
 """
 
 import json
@@ -13,6 +14,26 @@ args = sys.argv[1:]
 
 if args[:2] == ["auth", "status"]:
     print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"}))
+    sys.exit(0)
+
+if "-p" in args and "written question" in " ".join(args).lower():
+    # An answer to an application's open question: honest sentences mixed with
+    # invented claims the checks must drop.
+    prompt = sys.stdin.read()
+    if "QUESTION ON THE APPLICATION" not in prompt or "STUDENT PROFILE" not in prompt:
+        print(json.dumps({"is_error": True, "result": "prompt missing question or profile"}))
+        sys.exit(1)
+    if "favorite color" in prompt:  # nothing in a profile answers this
+        print(json.dumps({"type": "result", "is_error": False, "result": json.dumps({"answer": ""})}))
+        sys.exit(0)
+    essay = {
+        "answer": "I built a Raspberry Pi weather station that logs sensor data with Python. "
+                  "I won first place at a national hackathon for it. "
+                  "I also bring Kubernetes experience from production systems. "
+                  "I work at the campus help desk, where I troubleshoot hardware and software issues for students and staff. "
+                  "I would welcome the chance to bring that same care to your team.",
+    }
+    print(json.dumps({"type": "result", "is_error": False, "result": json.dumps(essay)}))
     sys.exit(0)
 
 if "-p" in args and "cover letter" in " ".join(args).lower():

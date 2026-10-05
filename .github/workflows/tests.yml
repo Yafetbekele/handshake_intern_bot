@@ -45,3 +45,6 @@ jobs:
 
       - name: Cover letter tests
         run: python tests/cover_letter_test.py
+
+      - name: Employer-site application tests
+        run: python tests/employer_apply_test.py

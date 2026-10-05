@@ -1420,6 +1420,119 @@ class HandshakeSession:
             return "applied", attach_note
         return "uncertain", f"submitted but no confirmation seen ({attach_note})"
 
+    # ------------------------------------------------------- employer's own site
+
+    def new_tab(self) -> Page:
+        """A second tab in the same browser, for pages that aren't Handshake."""
+        assert self._context is not None
+        return self._context.new_page()
+
+    def _outside(self, address: str) -> bool:
+        host = urlparse(address or "").netloc.lower()
+        return bool(host) and "joinhandshake.com" not in host and host != urlparse(self.base).netloc
+
+    def external_apply_url(self, job_id: str) -> tuple[str, str]:
+        """Where an "Apply externally" posting sends the student: (address, note).
+
+        Read only. The button is pressed the way a student would press it, the
+        address of the tab it opens is noted, and that tab is closed again.
+        The address is empty when it couldn't be found; the note says why.
+        """
+        assert self.page is not None
+        job = self.load_job(job_id)
+        if job.error:
+            return "", job.error
+        if job.apply_kind == "closed":
+            return "", "closed"
+        if job.apply_kind in {"quick", "already_applied"}:
+            return "", "applies on Handshake itself"
+
+        scope = self._detail_scope()
+        try:
+            links = scope.get_by_role("link", name=re.compile(r"apply", re.IGNORECASE))
+            for index in range(min(links.count(), 5)):
+                href = links.nth(index).get_attribute("href") or ""
+                if self._outside(href):
+                    return href, "link on the posting"
+        except Exception:
+            pass
+
+        button = self._visible_button(scope, EXTERNAL_TEXT) or self._apply_button()
+        if button is None:
+            return "", "no Apply button on the posting"
+        address = self._address_of_new_tab(button)
+        if not address:
+            # Handshake may ask first, in a dialog holding the link or a button to carry on.
+            dialog = self._first_visible("dialog", timeout=1500)
+            if dialog is not None:
+                try:
+                    anchors = dialog.locator("a[href^='http']")
+                    for index in range(min(anchors.count(), 8)):
+                        href = anchors.nth(index).get_attribute("href") or ""
+                        if self._outside(href):
+                            address = href
+                            break
+                except Exception:
+                    pass
+                if not address:
+                    # Never a plain "Apply" or "Submit": that could be Handshake's own form.
+                    carry_on = self._visible_button(dialog, EXTERNAL_TEXT) or self._visible_button(
+                        dialog, re.compile(r"^\s*(continue|proceed|go to|open|visit)\b", re.IGNORECASE))
+                    if carry_on is not None:
+                        address = self._address_of_new_tab(carry_on)
+                self._dismiss_dialog()
+        if not address and self._outside(self.page.url):  # it opened in this tab instead
+            address = self.page.url
+        return (address, "") if address else ("", "couldn't find where Apply externally leads")
+
+    def apply_area_summary(self) -> str:
+        """The buttons and Apply links on the open posting, for when the lookup above fails.
+
+        Handshake's layout changes; this is what to read to see how.
+        """
+        assert self.page is not None
+        scope = self._detail_scope()
+        lines = [f"address: {self.page.url}"]
+        try:
+            lines.append("buttons: " + " | ".join(" ".join(t.split())[:40] for t in scope.get_by_role("button").all_inner_texts()[:20]))
+            links = scope.get_by_role("link", name=re.compile(r"apply", re.IGNORECASE))
+            for index in range(min(links.count(), 6)):
+                link = links.nth(index)
+                lines.append(f"link: {' '.join((link.inner_text() or '').split())[:40]} -> {(link.get_attribute('href') or '')[:120]}")
+            dialog = self._first_visible("dialog", timeout=500)
+            if dialog is not None:
+                lines.append("dialog: " + " ".join((dialog.inner_text() or "").split())[:300])
+        except Exception as exc:
+            lines.append(f"(couldn't read the page: {type(exc).__name__})")
+        return "\n".join(lines)
+
+    def _address_of_new_tab(self, button: Locator) -> str:
+        """Click, and report where the tab that opens ends up once any redirects finish."""
+        assert self._context is not None
+        try:
+            with self._context.expect_page(timeout=6000) as opened:
+                button.click()
+            tab = opened.value
+        except Exception:
+            return ""
+        last, since = "", time.monotonic()
+        deadline = time.monotonic() + 15
+        try:
+            while time.monotonic() < deadline:
+                current = tab.url
+                if current != last:
+                    last, since = current, time.monotonic()
+                elif self._outside(current) and time.monotonic() - since > 1.5:
+                    break
+                tab.wait_for_timeout(300)
+        except Exception:
+            pass
+        try:
+            tab.close()
+        except Exception:
+            pass
+        return last if self._outside(last) else ""
+
     def _on_job_id(self, job_id: str) -> bool:
         assert self.page is not None
         match = JOB_ID_RE.search(self.page.url or "")

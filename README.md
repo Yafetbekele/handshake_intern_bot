@@ -241,6 +241,99 @@ To add a company, find its careers page's hiring system in the address
 (`boards.greenhouse.io/<board>`, `jobs.lever.co/<board>` or
 `jobs.ashbyhq.com/<board>`) and add a line to `elsewhere_companies.json`.
 
+### Applying on the employer's own site
+
+Double-click **Apply on employer sites.bat** (or `python employer_apply.py`).
+It works down a ranked list, best fit first, and applies on each employer's
+own application form. It asks which list, what to do, and how many:
+
+- **All internships, ranked** is the Handshake list above. For each posting it
+  presses Handshake's "Apply externally" button once, notes where it leads, and
+  closes that tab. The address is kept in `data/employer_links.json`, so a
+  posting is only looked up once.
+- **Found elsewhere** already has each company's own link, so Handshake isn't
+  opened at all.
+
+Then, for each posting, it opens the form, attaches your resume, and answers
+what it can from your profile's contact details and `application_answers`.
+
+- **Practice run** fills each form in and sends nothing. Start here.
+- **Asking before each one** (the default) leaves the filled form in the browser
+  window. Change anything you like there, then answer yes, no or later in the
+  black window. Nothing is sent until you say yes.
+- **Automatic** (`--auto-submit`, then typing `yes`) sends a form only when every
+  required question has an answer, your resume is attached, and it's one of
+  the three kinds of form below. Everything else is left for you.
+
+```bash
+python employer_apply.py --list elsewhere --dry-run --max 5
+```
+
+**Which sites.** Greenhouse, Lever and Ashby, which most of the smaller
+hardware, robotics and defense companies use and which need no account. Their
+real forms were read (nothing typed or sent) in October 2026. Other one-page
+forms are filled the same way, but never sent automatically.
+
+**Which it leaves for you.** Workday, iCIMS, Taleo, SuccessFactors, Oracle and
+similar sites make you create an account and sign in. The tool never makes an
+account or types a password, so those are listed with their direct employer
+link in `employer_site_results.csv` (in the apply-yourself folder) for you to
+do by hand. Many large companies on Handshake use these. Run
+`python employer_apply.py --links-only` to see how your list splits before
+applying to anything.
+
+**Questions.** A question is answered only from your saved answers or from
+what you type when it asks; dropdowns and Yes/No buttons are matched to your
+answer's wording, and it asks with the choices numbered when nothing matches.
+What you type is saved under that exact question in your profile, so the first
+few forms ask a lot and later ones ask little. To cut the asking down, add
+general answers to `application_answers`, for example
+`{"match": ["require sponsorship", "sponsorship"], "value": "No", "sensitive": true}`.
+Optional questions with no saved answer are left blank. A follow-up such as
+"If yes, please explain" is never answered from the main question's answer.
+
+**Written answers.** An open question such as "Why do you want to work here?"
+or "Tell us about a project you're proud of" is answered for you, for that one
+job, from `profile/career_profile.json` and your baseline cover letter.
+
+- **Claude writes it, then every sentence is checked** the same way cover
+  letters are. A sentence with a number, tool, name or claim that isn't in your
+  profile is cut. If more than two sentences are cut, the profile has nothing
+  to answer with, or Claude isn't signed in, nothing is written and the
+  question is asked or left for you.
+- **Length** is about 70 to 120 words, or whatever the question or the box
+  allows ("150 words max", a character limit).
+- **You see it before it goes.** The answer is printed in the black window and
+  sits in the form for you to edit. In automatic mode a form holding a written
+  answer waits for you instead of being sent; add `--send-essays` to send
+  those unread.
+- **Kept per job** in `tailored_resumes/<job>/written_answers.txt` (and
+  `.json`, which a later run reuses; edit it to change what gets filled in).
+- **Never written:** sponsorship, pay, demographic and other personal or legal
+  questions, plain facts such as a start date or how you heard of the job,
+  follow-ups, and "anything else?" boxes.
+- Each answer is one Claude request on your plan, practice runs included.
+  `--no-essays` turns this off.
+
+**Never.** Social Security numbers, bank details and passwords are never
+filled in. A security check (CAPTCHA) or a code the site emails you is never
+worked around: the tool chimes, you pass it in the browser window, and it
+carries on once the site confirms. With nobody there, that application is left.
+
+**Documents.** Your resume is the one the launcher remembers, or `--resume`.
+A resume or cover letter already made for that posting (by
+`letters_for_list.py` or the Make programs) is used instead. `--tailor-resume`
+makes a resume per job. A cover letter is written when a form requires one;
+`--cover-letters` writes one wherever a form takes one.
+
+**Afterwards.** A posting it applied to is marked Applied, the same as the
+button on the ranked pages, so it drops off every list. Each posting's outcome
+is kept in `data/employer_applications.json`, and a later run carries on from
+there instead of starting over (`--retry` goes back over earlier ones).
+`--max 10` is how many forms to fill in a run (in automatic mode, how many to
+send); `--top 100` is how far down the list to look. In automatic mode a form
+left for want of an answer isn't opened again until you've saved new answers.
+
 ### Marking postings you applied to
 
 Open the lists with **Open apply-yourself list** (in Programs or on the
@@ -649,6 +742,14 @@ python tests/prompts_test.py
 python tests/cover_letter_test.py
 ```
 
+```bash
+python tests/employer_apply_test.py
+```
+
+The employer-site tests fill in and send forms on local copies of a
+Greenhouse, a Lever and an Ashby form (`tests/fake_employer_sites.py`), never
+a real employer's.
+
 The tailoring tests use a made-up student in `tests/sample_profile.json` and a
 fake Claude program, so they never read your profile or use your Claude plan.
 
@@ -667,6 +768,9 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `resume_parser.py` | Resume text extraction and keyword detection. |
 | `rank_all.py`, `deep_rank.py`, `posting_cache.py` | Reads, saves and ranks every employer-site posting. |
 | `find_elsewhere.py`, `web_discovery.py`, `elsewhere_companies.json`, `Programs/Find internships elsewhere.bat` | The daily finder for internships on company career sites. |
+| `employer_apply.py`, `Programs/Apply on employer sites.bat` | Applies on employers' own sites, working down a ranked list. |
+| `employer_sites.py` | Reads, fills in and sends an employer's application form (Greenhouse, Lever, Ashby). |
+| `essay_answers.py` | Answers to an application's open questions, written from your profile and fact checked. |
 | `letters_for_list.py` | Cover letters (and resumes) for the top of a ranked list. |
 | `make_documents.py` | A resume or cover letter for one posting, without searching or applying. |
 | `Programs/Make a cover letter.bat`, `Programs/Make a resume.bat` | Double-click versions of `make_documents.py`. |
@@ -683,10 +787,28 @@ fake Claude program, so they never read your profile or use your Claude plan.
 
 ## Limits worth knowing
 
-- Most internships on Handshake apply on the employer's own website. The tool
-  can't fill those in, so they go on your apply-yourself list.
-- Written questions, phone numbers and other personal fields are never filled
-  in. Those forms go on your apply-yourself list too.
+- Most internships on Handshake apply on the employer's own website. The main
+  run puts those on your apply-yourself list; `employer_apply.py` then applies
+  to the ones on Greenhouse, Lever or Ashby. Sites that need an account
+  (Workday and the like) are still yours to do.
+- **Employer sites, checked:** reading the questions on real Greenhouse, Lever
+  and Ashby forms, and their dropdowns, radio buttons, Yes/No buttons and
+  school search responding. **Not checked on a real site:** attaching a file,
+  an actual submission and the confirmation after it, and Handshake's "Apply
+  externally" button (Handshake blocks a hidden browser, so that is first
+  tried on your own run). Those were only tested on local copies. Use a
+  practice run first, then "asking before each one". If a Handshake link
+  can't be found, what the page showed is saved in
+  `data/employer_link_problems.txt`.
+- Companies notice applications that look automated. Keep automatic runs small
+  and read what goes out in your name.
+- Written answers are fact checked sentence by sentence, but the checks can't
+  judge whether an answer is a good one or sounds like you. Read the first few.
+- Nearly every Greenhouse, Lever and Ashby form loads an invisible security
+  check that decides, when the form is sent, whether to challenge the sender.
+  How often it does can't be known without sending real applications.
+- On Handshake itself, written questions and personal fields with no saved
+  answer are never filled in. Those forms go on your apply-yourself list too.
 - Required fields are detected from the form's own markings. A question that is
   required but not marked that way can't be seen, so watch the first few runs.
 - Cover letters are fact checked sentence by sentence, but read a few in
