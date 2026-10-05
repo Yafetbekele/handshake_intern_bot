@@ -174,6 +174,8 @@ EXTERNAL_TEXT = re.compile(
     r"apply\s+externally|apply\s+on\s+(company|employer)|external\s+application",
     re.IGNORECASE,
 )
+# What Handshake calls a posting's employer-site address in its page data.
+EXTERNAL_URL_KEY = re.compile(r"external_?(apply_?)?(url|link)|apply_?(url|link)", re.IGNORECASE)
 # Personal or legal questions. The assistant answers these only with words the
 # student gave it, never with a guess of its own.
 SENSITIVE_QUESTION = re.compile(
@@ -1431,25 +1433,80 @@ class HandshakeSession:
         host = urlparse(address or "").netloc.lower()
         return bool(host) and "joinhandshake.com" not in host and host != urlparse(self.base).netloc
 
+    def _address_in_job_data(self, replies: list[Any], job_id: str) -> str:
+        """The employer's address from the data Handshake's page loaded for this posting.
+
+        Handshake sends the posting as JSON with an "externalUrl". The same
+        replies carry other postings too, so the one whose id is this job's is
+        wanted; failing that, an address is only used when it's the only one.
+        """
+        mine: list[str] = []
+        others: list[str] = []
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if isinstance(value, str) and EXTERNAL_URL_KEY.fullmatch(key) and self._outside(value):
+                        (mine if str(node.get("id", "")) == job_id else others).append(value)
+                    else:
+                        walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        for reply in replies:
+            try:
+                if "json" not in (reply.headers.get("content-type") or ""):
+                    continue
+                walk(reply.json())
+            except Exception:
+                continue  # not JSON after all, or the reply is gone
+        if mine:
+            return mine[0]
+        distinct = list(dict.fromkeys(others))
+        return distinct[0] if len(distinct) == 1 else ""
+
     def external_apply_url(self, job_id: str) -> tuple[str, str]:
         """Where an "Apply externally" posting sends the student: (address, note).
 
-        Read only. The button is pressed the way a student would press it, the
-        address of the tab it opens is noted, and that tab is closed again.
-        The address is empty when it couldn't be found; the note says why.
+        Read only. The address is read from the posting's own data as the page
+        loads, so nothing is pressed. Only if it isn't there is the button
+        pressed the way a student would press it, the address of the tab it
+        opens noted, and that tab closed again (Handshake then asks "Did you
+        apply?" on that posting). The address is empty when it couldn't be
+        found; the note says why.
         """
         assert self.page is not None
-        job = self.load_job(job_id)
-        if job.error:
-            return "", job.error
-        if job.apply_kind == "closed":
-            return "", "closed"
-        if job.apply_kind in {"quick", "already_applied"}:
-            return "", "applies on Handshake itself"
+        replies: list[Any] = []
+
+        def keep(reply: Any) -> None:
+            if "graphql" in reply.url or "/jobs/" in reply.url:
+                replies.append(reply)
+
+        self.page.on("response", keep)
+        try:
+            job = self.load_job(job_id)
+            if job.error:
+                return "", job.error
+            if job.apply_kind == "closed":
+                return "", "closed"
+            if job.apply_kind in {"quick", "already_applied"}:
+                return "", "applies on Handshake itself"
+            if job.apply_kind == "unknown" and job.title.strip().lower() in {"", "jobs"}:
+                return "", "closed"  # only Handshake's search page is there: the posting was taken down
+            address = self._address_in_job_data(replies, job_id)
+            if not address:  # the data can arrive a moment after the page settles
+                self.page.wait_for_timeout(2000)
+                address = self._address_in_job_data(replies, job_id)
+        finally:
+            self.page.remove_listener("response", keep)
+        if address:
+            return address, "from the posting's data"
 
         scope = self._detail_scope()
         try:
-            links = scope.get_by_role("link", name=re.compile(r"apply", re.IGNORECASE))
+            # "View application" appears once Apply externally has been pressed before.
+            links = scope.get_by_role("link", name=re.compile(r"appl", re.IGNORECASE))
             for index in range(min(links.count(), 5)):
                 href = links.nth(index).get_attribute("href") or ""
                 if self._outside(href):
@@ -1460,6 +1517,11 @@ class HandshakeSession:
         button = self._visible_button(scope, EXTERNAL_TEXT) or self._apply_button()
         if button is None:
             return "", "no Apply button on the posting"
+        try:
+            if not button.is_enabled():
+                return "", "couldn't find where Apply externally leads (its button is switched off)"
+        except Exception:
+            pass
         address = self._address_of_new_tab(button)
         if not address:
             # Handshake may ask first, in a dialog holding the link or a button to carry on.

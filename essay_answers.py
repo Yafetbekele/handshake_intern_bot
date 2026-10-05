@@ -49,7 +49,8 @@ ESSAY = re.compile(
     r"\bwhy\b|tell (us|me)|describe|explain|briefly|in a few sentences|\b\d+\s+words\b|"
     r"what (interests|excites|motivates|draws|attracts|makes you|do you (hope|want|bring|enjoy)|"
     r"are you (most )?(proud|passionate|excited|looking)|would you|about)|"
-    r"how (would|have|do|did) you|share (an?|your|something)|an example|a time (when|you)|"
+    r"how (would|have|do|did) you|share (an?|your|something)|an example|examples (of|highlighting|that|showing)|"
+    r"a time (when|you)|"
     r"proud of|passionate about|interest(ed)? in|about yourself|your (goals|interests|background)",
     re.IGNORECASE,
 )

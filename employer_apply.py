@@ -9,10 +9,10 @@
 
 rank_all.py and find_elsewhere.py make the lists. For each posting, best fit
 first, this finds the employer's application form (for a Handshake posting, by
-pressing its "Apply externally" button once and noting where it leads), fills
-it in from your saved answers, attaches your resume, and shows you the filled
-form in the browser before anything is sent. See employer_sites.py for what it
-will and won't fill in.
+reading the employer's address from the posting's own page), fills it in from
+your saved answers, attaches your resume, and shows you the filled form in the
+browser before anything is sent. See employer_sites.py for what it will and
+won't fill in.
 
 What happened to each posting is kept in data/employer_applications.json and
 "employer_site_results.csv" in the results folder. A posting it applied to is
@@ -35,6 +35,7 @@ from typing import Any
 import applied_myself
 import cover_letter
 import essay_answers
+import form_answers
 import posting_cache
 import prompts
 import tailor
@@ -43,8 +44,9 @@ from employer_sites import (
     DocumentSource,
     EmployerSite,
     EssayWriter,
-    contact_answers,
+    WorkOut,
     pick_option,
+    profile_answers,
     remember_answers,
     site_kind,
 )
@@ -53,6 +55,9 @@ from main import DATA_DIR, banner, load_config, load_selectors, manual_list
 
 # Not offered again on later runs (--retry brings back everything but "applied").
 SETTLED = {"applied", "declined", "uncertain", "needs_account", "closed", "no_form"}
+
+CLOSED_MESSAGE = ("\nThe browser window was closed, so the run stops here. "
+                  "What was done is saved; run again to carry on.")
 
 SAYS = {
     "applied": "applied",
@@ -142,6 +147,12 @@ class Record:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.entries, indent=1, ensure_ascii=False), encoding="utf-8")
 
+    def forget(self, posting_id: str, status: str) -> None:
+        """Drop a posting's entry if it still says `status`, now that it no longer holds."""
+        if self.status(posting_id) == status:
+            del self.entries[posting_id]
+            self.path.write_text(json.dumps(self.entries, indent=1, ensure_ascii=False), encoding="utf-8")
+
     def write_csv(self, folder: Path) -> Path:
         folder.mkdir(parents=True, exist_ok=True)
         out = folder / "employer_site_results.csv"
@@ -197,6 +208,7 @@ class Papers:
         self._ai: bool | None = None
         self.can_write = tailor.PROFILE_PATH.exists()
         self.essays = self.can_write and self.allow_ai and not getattr(args, "no_essays", False)
+        self.working_out = self.can_write and self.allow_ai and not getattr(args, "ask_me", False)
 
     @staticmethod
     def _existing(*paths: Any) -> Path | None:
@@ -275,6 +287,25 @@ class Papers:
 
         return write
 
+    def answers_for(self, posting: dict[str, Any]) -> WorkOut | None:
+        """Settles a form's leftover questions from the profile, or None when that's off."""
+        if not self.working_out:
+            return None
+        found_on = "Handshake" if posting["source"] == "ranked" else "the company's own careers website"
+
+        def settle(questions: list[dict[str, Any]]) -> dict[int, tuple[Any, str]]:
+            if not self._use_ai():  # Claude Code missing or signed out: the questions are asked instead
+                return {}
+            print(f"  working out {len(questions)} more answer{'s' if len(questions) != 1 else ''} from your profile...")
+            # Read afresh, so answers you typed earlier in this run count too.
+            profile = tailor.load_profile(tailor.PROFILE_PATH)
+            settled, notes = form_answers.work_out(questions, profile, posting["title"], posting["employer"], found_on)
+            for note in notes[:4]:
+                print(f"    not used: {note}")
+            return settled
+
+        return settle
+
     def for_posting(self, posting: dict[str, Any]) -> DocumentSource:
         def give(kind: str, required: bool) -> Path | None:
             if kind == "resume":
@@ -341,8 +372,8 @@ def load_answers() -> tuple[list[dict[str, Any]], Path]:
         return [], path
     profile = tailor.load_profile(path)
     saved = profile.get("application_answers", [])
-    # Saved answers come after the contact details so they win when both fit.
-    return contact_answers(profile) + (saved if isinstance(saved, list) else []), path
+    # Saved answers come after the profile's own facts so they win when both fit.
+    return profile_answers(profile) + (saved if isinstance(saved, list) else []), path
 
 
 def mark_applied(posting: dict[str, Any], link: str) -> None:
@@ -401,6 +432,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cover-letters", action="store_true",
                         help="write a cover letter wherever a form takes one, not only where it's required")
     parser.add_argument("--no-cover-letters", action="store_true", help="never write a cover letter")
+    parser.add_argument("--ask-me", action="store_true",
+                        help="ask me every question my saved answers don't cover, instead of working "
+                             "the answer out from my profile with Claude")
     parser.add_argument("--no-essays", action="store_true",
                         help="don't write answers to open questions; ask you, or leave them for you")
     parser.add_argument("--send-essays", action="store_true",
@@ -462,8 +496,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  resume   : {papers.resume}")
         print(f"  this run : up to {args.max} " + ("applications sent" if auto else "forms")
               + f", from {len(postings)} postings on the list")
-        print(f"  answers  : {len(answers)} saved; " + ("anything else, it asks you here and remembers"
-                                                        if ask else "anything else is left for you"))
+        print(f"  answers  : {len(answers)} from your profile and saved answers; "
+              + ("the rest are worked out from your profile with Claude, then " if papers.working_out else "the rest are ")
+              + ("asked here and remembered" if ask else "left for you"))
         print("  essays   : " + ("open questions are answered from your profile with Claude, fact checked"
                                 + ("" if not auto or args.send_essays else "; those forms wait for you to read")
                                 if papers.essays else "not written; asked, or left for you"))
@@ -498,15 +533,22 @@ def main(argv: list[str] | None = None) -> int:
                     if not signed_in:
                         print("  Not signed in to Handshake, so its postings can't be looked up this run.")
                         break
-                    link, why = session.external_apply_url(posting["id"])
+                    try:
+                        link, why = session.external_apply_url(posting["id"])
+                    except Exception as exc:
+                        if session.page is None or session.page.is_closed() or "closed" in str(exc).lower():
+                            print(CLOSED_MESSAGE)
+                            break
+                        link, why = "", f"couldn't read the posting ({type(exc).__name__})"
                     if link:
                         links.keep(posting["id"], link)
+                        record.forget(posting["id"], "no_link")  # an earlier run couldn't find it
                     else:
                         status = "closed" if why == "closed" else "no_link"
                         record.note(posting, status, why)
                         counts[status] = counts.get(status, 0) + 1
                         print(f"  -> {SAYS[status]}: {why}")
-                        if status == "no_link" and "couldn't find" in why:
+                        if status == "no_link":
                             note_link_problem(posting, why, session.apply_area_summary())
                         continue
                     time.sleep(random.uniform(1.0, 2.5))
@@ -519,6 +561,15 @@ def main(argv: list[str] | None = None) -> int:
                     continue
 
                 state, note = site.open(link)
+                if state == "stopped":  # the employer tab was closed; a fresh one, if the browser is still there
+                    try:
+                        site.home = site.page = session.new_tab()
+                        state, note = site.open(link)
+                    except Exception:
+                        state = "stopped"
+                if state == "stopped":
+                    print(CLOSED_MESSAGE)
+                    break
                 if state != "form":
                     record.note(posting, state, note, link, site_name)
                     counts[state] = counts.get(state, 0) + 1
@@ -527,15 +578,22 @@ def main(argv: list[str] | None = None) -> int:
                 site_name = note
                 if ask is not None:
                     ask.reset()
-                report = site.fill(papers.for_posting(posting), papers.essays_for(posting))
+                report = site.fill(papers.for_posting(posting), papers.essays_for(posting), papers.answers_for(posting))
                 saved = remember_answers(profile_path, site.learned)
                 site.learned = []
+                if not site.alive():
+                    print(CLOSED_MESSAGE)
+                    break
                 print(f"  filled in {len(report.filled)}: " + "; ".join(f[:70] for f in report.filled[:8])
                       + (" ..." if len(report.filled) > 8 else ""))
                 for question, text in report.written:
                     print(f"  written for \"{question[:80]}\":")
                     for paragraph in text.split("\n\n"):
                         print(textwrap.fill(paragraph, width=96, initial_indent="    | ", subsequent_indent="    | "))
+                if report.worked:
+                    print("  worked out from your profile:")
+                    for question, value, because in report.worked:
+                        print(f"    {question[:56]} -> {value[:44]}   ({because[:80]})")
                 if saved:
                     print(f"  saved {saved} of your answers for next time")
                 if report.missing:

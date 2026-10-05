@@ -14,7 +14,8 @@ in a browser, read only, nothing typed or sent):
   its text in .application-label (required ones carry a "✱"), radios and
   checkboxes wrapped in their own labels, real <select>s, a button#btn-submit,
   and a resume upload that fills in the name from the file.
-* Ashby: no <form> at all; each question is a
+* Ashby: no <form> at all, only a wrapper around each section of it (and the
+  demographic section can hold more controls than the main one); each question is a
   .ashby-application-form-field-entry with a label, Yes/No questions are a
   pair of buttons with aria-pressed, radio groups are a fieldset, there's an
   extra "autofill from resume" file input, and sending swaps the page for a
@@ -273,12 +274,12 @@ def ashby_yes_no(field_id: str, label: str, required: bool = True) -> str:
         f'<input type="checkbox" class="_input_1svni_78 visually-hidden" name="{field_id}" tabindex="-1"></div>'), required)
 
 
-def ashby_radio(field_id: str, label: str, choices: list[str]) -> str:
+def ashby_radio(field_id: str, label: str, choices: list[str], required: bool = True) -> str:
     options = "".join(
         f'<div class="_option_1258i_34"><span class="_container_132c8_28"><input type="radio" id="{field_id}-labeled-radio-{n}" name="{field_id}" value="{html.escape(c, quote=True)}"></span>'
         f'<label for="{field_id}-labeled-radio-{n}" class="_label_1258i_42">{c}</label></div>' for n, c in enumerate(choices))
     return (f'<fieldset class="_container_1258i_28 _fieldEntry_1e3gg_28 ashby-application-form-input-radio-group">'
-            f'<label class="_heading_f7cvd_52 _required_f7cvd_91 _label_1e3gg_42 ashby-application-form-question-title" for="{field_id}">{label}&nbsp;</label>{options}</fieldset>')
+            f'<label class="_heading_f7cvd_52{" _required_f7cvd_91" if required else ""} _label_1e3gg_42 ashby-application-form-question-title" for="{field_id}">{label}&nbsp;</label>{options}</fieldset>')
 
 
 def ashby_page(action: str) -> str:
@@ -288,7 +289,8 @@ def ashby_page(action: str) -> str:
 
     return f"""<!doctype html><html><head><title>Embedded Intern @ Acme</title>{STYLE}</head><body>
 <h1>Embedded Intern</h1>
-<div class="ashby-application-form-container" id="form">
+<div class="_container_j2da7_1" id="form">
+<div class="_section_101oc_37 ashby-application-form-section-container">
 <div><h3>Autofill from resume</h3><p>Upload your resume here to autofill key application fields.</p><input type="file" class="visually-hidden"><button>Upload file</button></div>
 {text("_systemfield_name", "Name", True)}{text("f-legal", "Legal First and Last Name", True)}{text("_systemfield_email", "Email", True, "email")}
 {ashby_entry("_systemfield_resume", "Resume", '<div role="presentation" class="ashby-application-form-input-file"><input accept=".pdf" id="_systemfield_resume" type="file" class="visually-hidden"><button>Upload File</button></div>', True)}
@@ -297,6 +299,12 @@ def ashby_page(action: str) -> str:
 {ashby_yes_no("f-auth", "Are you legally authorized to work in the United States?")}
 {ashby_yes_no("f-family", "Are you related to any current Acme employees?")}
 {ashby_entry("f-why", "Why do you want to work at Acme?", '<textarea id="f-why" name="f-why" placeholder="Type here..."></textarea>')}
+</div>
+<div class="_section_101oc_37 ashby-application-form-section-container"><h2>Equal opportunity questions</h2>
+{ashby_radio("eeoc_gender", "Gender", ["Male", "Female", "Decline to self-identify"], required=False)}
+{ashby_radio("eeoc_race", "Race", ["Hispanic or Latino", "White", "Black or African American", "Asian", "Native Hawaiian or Other Pacific Islander", "American Indian or Alaska Native", "Two or More Races", "Decline to self-identify"], required=False)}
+{ashby_radio("eeoc_veteran_status", "Veteran Status", ["I am a veteran", "I am not a veteran", "Decline to self-identify"], required=False)}
+</div>
 <div id="errors"></div>
 <button class="_button_zyh3g_28 _primary_zyh3g_97" id="send">Submit Application</button>
 </div>
@@ -330,11 +338,34 @@ document.getElementById('send').addEventListener('click', function () {{
 </script></body></html>"""
 
 
-def plain_page(action: str, required_essay: bool = False, captcha: bool = False) -> str:
+def plain_page(action: str, required_essay: bool = False, captcha: bool = False, quiz: bool = False,
+               wiping: bool = False) -> str:
     """A small company's own form: nothing this tool has seen before."""
     essay = ('<div class="form-group"><label for="why">Why do you want to work here? *</label>'
              '<textarea id="why" name="why" required></textarea></div>') if required_essay else ""
+    if quiz:
+        # Questions no saved answer covers: some the profile settles, some it doesn't.
+        def choice(name: str, label: str, options: list[str]) -> str:
+            return (f'<div class="form-group"><label for="{name}">{label} *</label><select id="{name}" name="{name}" required>'
+                    '<option value="">Select...</option>' + "".join(f"<option>{o}</option>" for o in options) + "</select></div>")
+
+        def box(name: str, label: str) -> str:
+            return f'<div class="form-group"><label for="{name}">{label} *</label><input id="{name}" name="{name}" required></div>'
+
+        essay = (box("gy", "Expected graduation year") + choice("hear", "How did you hear about us?", ["Handshake", "LinkedIn", "Other"])
+                 + choice("felony", "Have you ever been convicted of a felony?", ["Yes", "No"])
+                 + box("mgpa", "Master's GPA") + box("majorgpa", "GPA in your major courses only, if you know it")
+                 + choice("rel", "Are you related to a current employee?", ["Yes", "No"])
+                 + box("gy2", "Graduation year (four digits), as it will appear on your transcript"))
     check = ""
+    if wiping:
+        # Like a site that redraws its form after reading the resume: an answer given early is emptied later.
+        check = """
+<script>
+document.getElementById('em').addEventListener('input', function () {
+  setTimeout(function () { document.getElementById('fn').value = ''; }, 300);
+});
+</script>"""
     if captcha:
         # Sending brings up a security check instead; it clears by itself after a
         # few seconds, the way it would once the student passed it by hand.
@@ -409,9 +440,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(plain_page("/plain/apply"))
         elif path == "/essay/apply":
             self._send(plain_page("/essay/apply", required_essay=True))
+        elif path == "/quiz/apply":
+            self._send(plain_page("/quiz/apply", quiz=True))
+        elif path == "/wiping/apply":
+            self._send(plain_page("/wiping/apply", wiping=True))
         elif path == "/guarded/apply":
             self._send(plain_page("/guarded/apply", captcha=True))
-        elif path in ("/plain/done", "/essay/done", "/guarded/done"):
+        elif path in ("/plain/done", "/essay/done", "/guarded/done", "/quiz/done", "/wiping/done"):
             self._send("<html><body><p>Thanks for applying! We received your application.</p></body></html>")
         elif path == "/embedded":
             self._send("<html><body><h1>Careers at Acme</h1><iframe src='/gh/acme/jobs/1' style='width:900px;height:1400px'></iframe></body></html>")
@@ -419,6 +454,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send("<html><body><h1>Sorry, this job is no longer available.</h1></body></html>")
         elif path == "/signin":
             self._send("<html><body><h1>Sign in to apply</h1><form><input type='email' name='user'><input type='password' name='pass'><button>Sign in</button></form></body></html>")
+        elif path == "/careers":
+            # A big company's careers page: filters folded away and a job-alert box, no application.
+            self._send("<html><body><h1>Careers at BigCo</h1><form class='filters'><div style='display:none'>"
+                       "<label><input type='checkbox' name='team'>Hardware</label><label><input type='checkbox' name='team'>Software</label>"
+                       "<label><input type='checkbox' name='remote'>Remote</label><label><input type='checkbox' name='email_alerts'>Alerts</label>"
+                       "</div></form><form class='alerts'><label>Email me new jobs <input type='email' name='alert'></label>"
+                       "<label>Keyword <input name='kw'></label><label>Location <input name='where'></label></form></body></html>")
+        elif path == "/portal/job":
+            self._send("<html><body><h1>Systems Intern</h1><a href='/portal/login'>Apply now</a></body></html>")
+        elif path == "/portal/login":  # asks for an email first; the password comes on the next screen
+            self._send("<html><body><h1>Sign in or create an account</h1><input type='email' name='user'><button>Next</button></body></html>")
         elif path == "/blank":
             self._send("<html><body>Security check</body></html>")
         else:

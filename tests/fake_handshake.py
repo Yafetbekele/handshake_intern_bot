@@ -38,6 +38,12 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 # Where "Apply externally" leads. Tests point this at a local stand-in.
 EXTERNAL_APPLY_URL = "https://example.com/apply"
+# Postings an employer has taken down. Handshake keeps the address but shows
+# only its "Jobs" search page, with no posting beside the results.
+REMOVED_IDS = {"4040"}
+# Whether a posting's page fetches its own data. Off, the address can only be
+# found by pressing "Apply externally".
+SERVE_JOB_DATA = True
 
 
 NAV = (
@@ -441,7 +447,9 @@ def job_panel(job_id: str) -> str:
     data = JOBS[job_id]
     similar = next(i for i in ALL_IDS if i != job_id)
     external = data["button"] == "Apply externally"
-    onclick = f"window.open('{EXTERNAL_APPLY_URL}')" if external else "openDialog()"
+    onclick = f"window.pressedApply = true; window.open('{EXTERNAL_APPLY_URL}')" if external else "openDialog()"
+    # Like Handshake, the page fetches the posting's own data, which holds the employer's address.
+    job_data = f"<script>fetch('/hs/graphql?job={job_id}');</script>" if SERVE_JOB_DATA else ""
     more = ""
     if data["more"]:
         more = (
@@ -460,7 +468,22 @@ def job_panel(job_id: str) -> str:
         f"<h2>Job description</h2><div>{data['body']}</div>{more}"
         "<h2>Similar jobs</h2>"
         f"<a href='/jobs/{similar}' target='_blank'>{JOBS[similar]['title']}</a>"
+        f"{job_data}"
     )
+
+
+def job_data_json(job_id: str) -> str:
+    """Shaped like Handshake's own answer for a posting (seen October 2026): the
+    posting with its externalUrl, next to other postings' data that has theirs."""
+    data = JOBS.get(job_id, {})
+    external = data.get("button") == "Apply externally"
+    similar = next(i for i in ALL_IDS if i != job_id)
+    return json.dumps({"data": {
+        "viewer": {"iosAppBaseUrl": "https://itunes.apple.com/app/id1"},
+        "job": {"id": job_id, "title": data.get("title", ""), "externalUrl": EXTERNAL_APPLY_URL if external else None,
+                "employer": {"id": "55", "additionalBenefitsLink": "https://benefits.example/perks"}},
+        "similarJobs": [{"id": similar, "externalUrl": "https://someone-else.example/apply"}],
+    }})
 
 
 SAVED_DOCUMENTS = {
@@ -516,10 +539,10 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # silence the default stderr spam
         return
 
-    def _send(self, body: str) -> None:
+    def _send(self, body: str, content_type: str = "text/html; charset=utf-8") -> None:
         payload = body.encode("utf-8")
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -556,12 +579,13 @@ class Handler(BaseHTTPRequestHandler):
 
         panel, extra, employer_name = "", "", ""
         if job_id is not None:
-            if job_id not in JOBS:
+            if job_id not in JOBS and job_id not in REMOVED_IDS:
                 self.send_error(404)
                 return
-            panel = job_panel(job_id)
-            extra = apply_form_extras(job_id)
-            employer_name = JOBS[job_id]["employer"]
+            if job_id in JOBS:  # a removed posting gets the search page with nothing beside it
+                panel = job_panel(job_id)
+                extra = apply_form_extras(job_id)
+                employer_name = JOBS[job_id]["employer"]
 
         self._send(
             PAGE.format(
@@ -579,6 +603,10 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         path = parsed.path.rstrip("/") or "/"
+
+        if path == "/hs/graphql":
+            self._send(job_data_json(params.get("job", [""])[0]), "application/json; charset=utf-8")
+            return
 
         # A search address that no longer exists and bounces to the home page.
         if path == "/old/postings":

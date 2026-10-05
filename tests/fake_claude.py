@@ -16,6 +16,39 @@ if args[:2] == ["auth", "status"]:
     print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"}))
     sys.exit(0)
 
+if "-p" in args and "fill in a student's internship application" in " ".join(args).lower():
+    # Leftover form questions: some answers the profile settles, and some that
+    # must be turned down (a guess on a legal question, an invented figure, an
+    # answer that isn't one of the form's choices).
+    prompt = sys.stdin.read()
+    marker = "QUESTIONS STILL EMPTY ON THE FORM:\n"
+    if marker not in prompt or "STUDENT PROFILE" not in prompt:
+        print(json.dumps({"is_error": True, "result": "prompt missing questions or profile"}))
+        sys.exit(1)
+    questions = json.loads(prompt.split(marker, 1)[1].split("\n\nReply with JSON", 1)[0])
+    answers = []
+    for question in questions:
+        text = question["question"].lower()
+        if "how did you hear" in text:
+            answer, because = "Handshake", "found on Handshake"
+        elif "felony" in text:
+            answer, because = "No", "students rarely have one"
+        elif "gpa" in text and "master" in text:
+            answer, because = "N/A", "not pursuing a master's degree"
+        elif "gpa" in text:
+            answer, because = "3.97", "rounded up"
+        elif "related to" in text:
+            answer, because = "Probably not", "no relatives listed"
+        elif "graduation year" in text:
+            answer, because = "2028", "expected graduation May 2028"
+        elif "sponsorship" in text:
+            answer, because = "No", "earlier answer about sponsorship"
+        else:
+            answer, because = None, "the profile doesn't say"
+        answers.append({"id": question["id"], "answer": answer, "because": because})
+    print(json.dumps({"type": "result", "is_error": False, "result": json.dumps({"answers": answers})}))
+    sys.exit(0)
+
 if "-p" in args and "written question" in " ".join(args).lower():
     # An answer to an application's open question: honest sentences mixed with
     # invented claims the checks must drop.

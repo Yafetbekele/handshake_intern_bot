@@ -63,15 +63,16 @@ import applied_myself  # noqa: E402
 import employer_apply  # noqa: E402
 import essay_answers  # noqa: E402
 import fake_employer_sites  # noqa: E402
+import form_answers  # noqa: E402
 import fake_handshake  # noqa: E402
 from employer_sites import (  # noqa: E402
     EmployerSite,
     apply_address,
     candidates,
     clean_label,
-    contact_answers,
     document_kind,
     pick_option,
+    profile_answers,
     remember_answers,
     site_kind,
 )
@@ -98,7 +99,7 @@ def section(title: str) -> None:
 
 def answers_now() -> list[dict]:
     saved = json.loads(PROFILE.read_text(encoding="utf-8"))
-    return contact_answers(saved) + saved["application_answers"]
+    return profile_answers(saved) + saved["application_answers"]
 
 
 def documents(kind: str, required: bool) -> Path | None:
@@ -122,6 +123,10 @@ check("an address already on the form is kept", apply_address("https://jobs.leve
 check("required marks are dropped", clean_label("First Name*") == "First Name" and clean_label("Email ✱") == "Email"
       and clean_label("Top choice? (required)") == "Top choice?")
 
+check("a field's own code tacked onto its label is dropped",
+      clean_label("Location 296526d0") == "Location" and clean_label("Graduation year 20282028") == "Graduation year 20282028"
+      and clean_label("Describe the facade") == "Describe the facade")
+
 saved = answers_now()
 best = candidates("Are you legally authorized to work in the United States?", saved)
 check("'authorized to work' beats 'state' in a work question", bool(best) and best[0]["value"] == "Yes", best[:1])
@@ -143,6 +148,29 @@ check("a long saved question that was cut short still matches",
       bool(candidates("Will you require sponsorship from Acme for employment now or in the future (e.g. H1B)?", cut_short)))
 later = saved + [{"match": ["degree"], "value": "Bachelor's Degree"}]
 check("the newest answer to exactly this question comes first", candidates("Degree", later)[0]["value"] == "Bachelor's Degree")
+
+check("the major, from the degree in the profile", candidates("Discipline", saved)[0]["value"] == "Computer Science")
+check("graduation month and year, separately",
+      (candidates("End date month", saved)[0]["value"], candidates("End date year", saved)[0]["value"]) == ("May", "2028"))
+check("the GPA", candidates("Undergrad GPA", saved)[0]["value"] == "3.7")
+degrees = ["Associate's Degree", "Bachelors", "Bachelor's Degree", "Master's Degree"]
+check("the degree, in a form's own words",
+      any(pick_option(degrees, str(a["value"])) == 2 for a in candidates("Degree", saved)), [a["value"] for a in candidates("Degree", saved)])
+check("a master's GPA is not the GPA", candidates("Masters GPA", saved) == [])
+check("nor a master's graduation date the graduation date",
+      candidates("Select your anticipated master's degree graduation date", saved) == [])
+check("'highest degree completed' is not the degree being studied for", candidates("Highest degree completed", saved) == [])
+
+profile_raw = PROFILE.read_text(encoding="utf-8")
+check("a legal question the profile is silent on is never worked out",
+      not form_answers.grounded("Have you ever been convicted of a felony?", profile_raw.lower()))
+check("one the student has answered before can be", form_answers.grounded("Will you require sponsorship from Acme?", profile_raw.lower()))
+check("a plain question always can", form_answers.grounded("How did you hear about us?", profile_raw.lower()))
+check("a figure from the profile is fine", form_answers.figures_known("2028", profile_raw, "Graduation year"))
+check("a date written another way is fine", form_answers.figures_known("05/2028", profile_raw, "Graduation date"))
+check("an invented figure is not", not form_answers.figures_known("3.97", profile_raw, "GPA"))
+check("the phone number with other punctuation is fine", form_answers.figures_known("555-010-0000", profile_raw, "Phone"))
+check("another phone number is not", not form_answers.figures_known("555-010-9999", profile_raw, "Phone"))
 
 check("exact option", pick_option(["Yes", "No"], "no") == 1)
 check("yes matches a longer yes", pick_option(["Yes, I am authorized", "No, I am not"], "Yes") == 0)
@@ -304,6 +332,8 @@ try:
         yes_no = fields["Are you legally authorized to work in the United States?"]
         check("Yes/No buttons read as one required question", yes_no["kind"] == "buttons" and yes_no["required"] and yes_no["options"] == ["Yes", "No"], yes_no)
         check("optional essay read as optional", not fields["Why do you want to work at Acme?"]["required"])
+        check("every section of the form is read, not only the one with the most boxes",
+              {"Name", "Email", "Resume", "Gender", "Race"} <= set(fields), sorted(fields))
         report = site.fill(documents)
         print("  filled:", "; ".join(report.filled))
         check("nothing left empty", report.missing == [], report.missing)
@@ -325,6 +355,9 @@ try:
         state, note = site.open("https://acme.wd5.myworkdayjobs.com/careers/job/1")
         check("an account site isn't even opened", state == "needs_account" and "Workday" in note, note)
         check("a page with no form", site.open(f"{EMPLOYER}/nothing-here")[0] == "no_form")
+        check("a careers page with only search and job-alert boxes isn't a form", site.open(f"{EMPLOYER}/careers")[0] == "no_form")
+        state, note = site.open(f"{EMPLOYER}/portal/job")
+        check("an Apply button that leads to a sign-in page", state == "needs_account" and page.url.endswith("/portal/login"), (state, note, page.url))
         state, _ = site.open(f"{EMPLOYER}/embedded")
         check("a form inside a frame on the company's page", state == "form" and site.flavor == "greenhouse", (state, site.flavor))
         check("and it can be read there", len(site.scan()) > 10)
@@ -359,6 +392,56 @@ try:
         site.fill(documents, essays)
         check("questions that aren't essays never reach the writer", wrote == [], wrote)
 
+        sent_to_claude: list[str] = []
+        turned_down: list[str] = []
+
+        def settle(questions: list[dict]) -> dict:
+            sent_to_claude.extend(q["question"] for q in questions)
+            found, notes = form_answers.work_out(questions, json.loads(PROFILE.read_text(encoding="utf-8")),
+                                                 "Robotics Intern", "Tiny Robotics", "Handshake")
+            turned_down.extend(notes)
+            return found
+
+        left = ["Have you ever been convicted of a felony?", "GPA in your major courses only, if you know it",
+                "Are you related to a current employee?"]
+        site.open(f"{EMPLOYER}/quiz/apply")
+        report = site.fill(documents, None, settle)
+        print("  worked out:", report.worked)
+        check("a profile fact needs no working out",
+              "Expected graduation year" not in sent_to_claude and page.locator("#gy").input_value() == "2028", sent_to_claude)
+        check("leftover questions the profile settles are filled in",
+              {q for q, _, _ in report.worked} == {"How did you hear about us?", "Master's GPA",
+                                                   "Graduation year (four digits), as it will appear on your transcript"},
+              report.worked)
+        check("with the right values",
+              (page.locator("#hear").input_value(), page.locator("#mgpa").input_value(), page.locator("#gy2").input_value())
+              == ("Handshake", "N/A", "2028"))
+        check("each with where it came from", all(because for _, _, because in report.worked))
+        check("a guess on a legal question, an invented figure and a non-choice are all left empty", report.missing == left, report.missing)
+        check("and the student is told why",
+              any("figure" in n for n in turned_down) and any("choices" in n for n in turned_down), turned_down)
+        asked.clear()
+        site = EmployerSite(page, answers_now(), ask=make_asker({"felony": "No", "major courses": "3.5", "related": "No"}), say=said.append)
+        site.open(f"{EMPLOYER}/quiz/apply")
+        report = site.fill(documents, None, settle)
+        check("only what couldn't be worked out is asked", sorted(q for q, _ in asked) == sorted(left), asked)
+        check("and then nothing is left", report.missing == [], report.missing)
+        check("what was worked out is not saved as the student's own words",
+              not any("hear" in a["match"][0] for a in site.learned), site.learned)
+        site = EmployerSite(page, answers_now(), ask=None, say=said.append)
+
+        site.open(f"{EMPLOYER}/wiping/apply")
+        report = site.fill(documents)
+        check("an answer the site wiped is given again",
+              report.missing == [] and page.locator("#fn").input_value() == "Jane", (report.missing, page.locator("#fn").input_value()))
+
+        other = browser.new_page()
+        gone = EmployerSite(other, answers_now(), ask=None, say=said.append)
+        gone.open(f"{EMPLOYER}/plain/apply")
+        other.close()
+        check("a closed tab is never mistaken for a finished form", gone.missing_required() != [] and not gone.alive())
+        check("and nothing more is tried in it", gone.open(f"{EMPLOYER}/plain/apply")[0] == "stopped")
+
         sent_before = len(fake_employer_sites.SUBMISSIONS)
         site.open(f"{EMPLOYER}/guarded/apply")
         site.fill(documents)
@@ -381,8 +464,16 @@ try:
     with HandshakeSession({"handshake_base_url": HANDSHAKE, "headless": True}, selectors, WORK / "probe_profile") as session:
         session.ensure_logged_in(timeout_seconds=20)
         address, why = session.external_apply_url("1002")
-        check("the employer's address is found", address == f"{EMPLOYER}/gh/acme/jobs/1", (address, why))
-        check("the tab it opened was closed again", len(session._context.pages) == 1, len(session._context.pages))
+        check("the employer's address is read from the posting's own data", address == f"{EMPLOYER}/gh/acme/jobs/1" and "data" in why, (address, why))
+        check("not another posting's address from the same data", "someone-else" not in address)
+        check("without pressing Apply externally", not session.page.evaluate("() => !!window.pressedApply"))
+        check("or opening a tab", len(session._context.pages) == 1, len(session._context.pages))
+        fake_handshake.SERVE_JOB_DATA = False
+        address, why = session.external_apply_url("1002")
+        check("with no data on the page, pressing the button finds it", address == f"{EMPLOYER}/gh/acme/jobs/1", (address, why))
+        check("and the tab it opened was closed again", len(session._context.pages) == 1, len(session._context.pages))
+        fake_handshake.SERVE_JOB_DATA = True
+        check("a posting the employer took down is reported closed", session.external_apply_url("4040") == ("", "closed"))
         address, why = session.external_apply_url("1001")
         check("a posting that applies on Handshake has none", address == "" and "Handshake" in why, (address, why))
         check("and its Apply button wasn't pressed", session._first_visible("dialog", timeout=500) is None)

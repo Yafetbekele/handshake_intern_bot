@@ -248,9 +248,12 @@ It works down a ranked list, best fit first, and applies on each employer's
 own application form. It asks which list, what to do, and how many:
 
 - **All internships, ranked** is the Handshake list above. For each posting it
-  presses Handshake's "Apply externally" button once, notes where it leads, and
-  closes that tab. The address is kept in `data/employer_links.json`, so a
-  posting is only looked up once.
+  opens the posting on Handshake and reads the employer's address from the
+  page's own data. Nothing is pressed. (Only if the address isn't there does it
+  press "Apply externally" once and note where the new tab goes; Handshake then
+  asks "Did you apply?" on that posting.) The address is kept in
+  `data/employer_links.json`, so a posting is only looked up once. A posting
+  the employer has taken down is noted as closed.
 - **Found elsewhere** already has each company's own link, so Handshake isn't
   opened at all.
 
@@ -282,15 +285,40 @@ do by hand. Many large companies on Handshake use these. Run
 `python employer_apply.py --links-only` to see how your list splits before
 applying to anything.
 
-**Questions.** A question is answered only from your saved answers or from
-what you type when it asks; dropdowns and Yes/No buttons are matched to your
-answer's wording, and it asks with the choices numbered when nothing matches.
-What you type is saved under that exact question in your profile, so the first
-few forms ask a lot and later ones ask little. To cut the asking down, add
-general answers to `application_answers`, for example
-`{"match": ["require sponsorship", "sponsorship"], "value": "No", "sensitive": true}`.
+**Questions.** Each question is answered from the first of these that has an
+answer for it:
+
+1. **Your saved answers and your profile's own facts**: name, email, phone,
+   school, degree, major, GPA, graduation month and year. Dropdowns and Yes/No
+   buttons are matched to your answer's wording.
+2. **Worked out from your profile.** What's left is put to Claude in one
+   request per form, with your profile and the form's own choices. It answers
+   only what your profile or an earlier answer of yours settles: "Degree" in
+   the form's own terms, a sponsorship question you answered for another
+   company, "How did you hear about us?". Each answer is printed with the fact
+   it rests on, for example
+   `Degree -> Bachelor's Degree   (B.S. in Computer Engineering)`.
+3. **You.** Only what your profile doesn't settle is asked, with the choices
+   numbered. What you type is saved in your profile, and from then on the
+   same question from any company can be worked out.
+
+Worked-out answers are checked before they're used. One is dropped unless it
+is one of the form's own choices, every figure in it is in your profile, and,
+for a personal or legal question (sponsorship, citizenship, clearance, pay,
+criminal record, gender and so on), your profile says something on that
+subject. So it can carry your sponsorship answer over to another company, but
+it can't answer a criminal-record question you've never answered. They aren't
+saved to your profile, because you didn't say them. `--ask-me` turns this step
+off and asks you instead.
+
 Optional questions with no saved answer are left blank. A follow-up such as
-"If yes, please explain" is never answered from the main question's answer.
+"If yes, please explain" is never answered from the main question's answer,
+and neither is a question about a master's degree or your "highest degree
+completed" from your current degree.
+
+Some sites redraw their form after reading your resume and empty questions
+already answered; the tool checks at the end and answers those again. If you
+close the browser window, the run stops there instead of carrying on.
 
 **Written answers.** An open question such as "Why do you want to work here?"
 or "Tell us about a project you're proud of" is answered for you, for that one
@@ -771,6 +799,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `employer_apply.py`, `Programs/Apply on employer sites.bat` | Applies on employers' own sites, working down a ranked list. |
 | `employer_sites.py` | Reads, fills in and sends an employer's application form (Greenhouse, Lever, Ashby). |
 | `essay_answers.py` | Answers to an application's open questions, written from your profile and fact checked. |
+| `form_answers.py` | Works out a form's leftover questions from your profile, and checks what comes back. |
 | `letters_for_list.py` | Cover letters (and resumes) for the top of a ranked list. |
 | `make_documents.py` | A resume or cover letter for one posting, without searching or applying. |
 | `Programs/Make a cover letter.bat`, `Programs/Make a resume.bat` | Double-click versions of `make_documents.py`. |
@@ -791,15 +820,17 @@ fake Claude program, so they never read your profile or use your Claude plan.
   run puts those on your apply-yourself list; `employer_apply.py` then applies
   to the ones on Greenhouse, Lever or Ashby. Sites that need an account
   (Workday and the like) are still yours to do.
-- **Employer sites, checked:** reading the questions on real Greenhouse, Lever
-  and Ashby forms, and their dropdowns, radio buttons, Yes/No buttons and
-  school search responding. **Not checked on a real site:** attaching a file,
-  an actual submission and the confirmation after it, and Handshake's "Apply
-  externally" button (Handshake blocks a hidden browser, so that is first
-  tried on your own run). Those were only tested on local copies. Use a
-  practice run first, then "asking before each one". If a Handshake link
-  can't be found, what the page showed is saved in
+- **Employer sites, checked:** finding the employer's address for real
+  Handshake postings; reading the questions on 175 real Greenhouse, Lever and
+  Ashby forms; and their dropdowns, radio buttons, Yes/No buttons and school
+  search responding. **Not checked on a real site:** attaching a file, an
+  actual submission, and the confirmation after it. Those were only tested on
+  local copies. Use a practice run first, then "asking before each one". If a
+  Handshake link can't be found, what the page showed is saved in
   `data/employer_link_problems.txt`.
+- Big companies' own career sites (Qualcomm, TikTok and the like) mostly end
+  at a sign-in page or a form the tool can't find. Those are noted with their
+  link and left for you.
 - Companies notice applications that look automated. Keep automatic runs small
   and read what goes out in your name.
 - Written answers are fact checked sentence by sentence, but the checks can't

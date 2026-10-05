@@ -99,7 +99,9 @@ def clean_label(text: str) -> str:
     """A question as the student would read it, without required marks."""
     text = re.sub(r"[*✱]", " ", text or "")
     text = re.sub(r"\(\s*(required|optional)\s*\)", " ", text, flags=re.IGNORECASE)
-    return " ".join(text.split()).strip(" :")
+    text = " ".join(text.split()).strip(" :")
+    # Some sites tack the field's own code onto its label ("Location 296526d0").
+    return re.sub(r"\s+(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8}$", "", text)
 
 
 def norm(text: str) -> str:
@@ -123,6 +125,14 @@ FOLLOW_UP = re.compile(
 )
 
 
+# "Master's GPA" is not the GPA question, and "highest degree completed" is not
+# the degree being studied for. These too need an answer saved for exactly them.
+NOT_THE_USUAL = re.compile(
+    r"master'?s|doctora|ph\.?\s?d\b|graduate (school|degree)|\bmba\b|high school|highest|completed|obtained|earned|previous",
+    re.IGNORECASE,
+)
+
+
 def candidates(label: str, answers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Saved answers that fit this question, best first.
 
@@ -135,7 +145,7 @@ def candidates(label: str, answers: list[dict[str, Any]]) -> list[dict[str, Any]
     if not text:
         return []
     words = len(text.split())
-    follow_up = bool(FOLLOW_UP.search(text))
+    follow_up = bool(FOLLOW_UP.search(text) or NOT_THE_USUAL.search(text))
     exact: list[dict[str, Any]] = []
     partial: list[tuple[int, int, dict[str, Any]]] = []
     for position, answer in enumerate(answers):
@@ -220,6 +230,53 @@ def contact_answers(profile: dict[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
+def education_answers(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    """School, degree, major, GPA and graduation from the profile's first education entry.
+
+    Forms ask for these in pieces ("End date month", "Discipline", "Degree"
+    with their own list of choices), so each fact is offered in the shapes a
+    form might want. Like the contact details, they only answer short labels.
+    """
+    schools = profile.get("education") or []
+    school = schools[0] if schools and isinstance(schools[0], dict) else {}
+    found: list[dict[str, Any]] = []
+
+    def add(phrases: list[str], value: Any) -> None:
+        if str(value or "").strip():
+            found.append({"match": phrases, "value": str(value).strip(), "max_words": 6})
+
+    degree = str(school.get("degree") or "")  # "B.S. in Computer Engineering"
+    split = re.match(r"\s*(.+?)\s+in\s+(.+)", degree)
+    level = ""
+    if re.match(r"\s*(b\.?\s?[sae]\.?\b|bachelor)", degree, re.IGNORECASE):
+        level = "Bachelor's"
+    elif re.match(r"\s*(m\.?\s?[sae]\.?\b|master)", degree, re.IGNORECASE):
+        level = "Master's"
+    elif re.match(r"\s*(a\.?\s?[sa]\.?\b|associate)", degree, re.IGNORECASE):
+        level = "Associate's"
+    when = re.match(r"\s*([A-Za-z]+)\.?\s+(\d{4})", str(school.get("expected_graduation") or ""))
+
+    add(["school", "university", "college", "college/university", "institution", "school name"], school.get("school"))
+    add(["degree", "degree level", "degree type", "degree level currently pursuing", "degree pursuing",
+         "current degree", "level of education"], level)
+    add(["major", "discipline", "field of study", "area of study", "major/field of study", "course of study"],
+        split.group(2) if split else "")
+    add(["gpa", "undergrad gpa", "undergraduate gpa", "cumulative gpa", "current gpa", "overall gpa"], school.get("gpa"))
+    add(["class standing", "year in school", "current year in school", "academic standing", "class year"],
+        school.get("standing"))
+    if when:
+        add(["graduation month", "end date month", "expected graduation month"], when.group(1))
+        add(["graduation year", "end date year", "expected graduation year", "year of graduation"], when.group(2))
+        add(["graduation date", "expected graduation", "expected graduation date", "anticipated graduation",
+             "anticipated graduation date"], f"{when.group(1)} {when.group(2)}")
+    return found
+
+
+def profile_answers(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    """Everything the profile itself answers, before any saved answers."""
+    return contact_answers(profile) + education_answers(profile)
+
+
 def remember_answers(profile_path: Path, learned: list[dict[str, Any]]) -> int:
     """Keep what the student typed during a run, in their profile, for next time."""
     import json
@@ -275,6 +332,8 @@ CLOSED_TEXT = re.compile(
     r"couldn.t find (anything|that|the page)|this job is closed",
     re.IGNORECASE,
 )
+# An address that is a sign-in or sign-up page, whatever the site.
+SIGN_IN_PATH = re.compile(r"/(login|log-in|signin|sign-in|sso|signup|sign-up|register|auth)(/|$)", re.IGNORECASE)
 CONFIRM_URL = re.compile(r"confirmation|/thanks|thank[-_]?you|/success|submitted", re.IGNORECASE)
 CONFIRM_TEXT = re.compile(
     r"thank you for applying|thanks for applying|thank you for your application|"
@@ -317,8 +376,11 @@ FIND_ROOT_JS = r"""
   else if (document.querySelector('form.application--form, form#application_form, #application-form [id^="question_"]')) flavor = 'greenhouse';
 
   let best = null, most = 0;
-  for (const selector of ['#application-form', '#application_form', 'form[id*="application" i]',
-                          'form[class*="application" i]', '[class*="application-form" i]', 'form']) {
+  // Ashby has no wrapper around its form, only one around each section of it,
+  // so the whole page is read there.
+  const selectors = flavor === 'ashby' ? [] : ['#application-form', '#application_form', 'form[id*="application" i]',
+                                               'form[class*="application" i]', '[class*="application-form" i]', 'form'];
+  for (const selector of selectors) {
     for (const el of document.querySelectorAll(selector)) {
       const count = usable(el).length;
       if (count > most) { best = el; most = count; }
@@ -546,6 +608,10 @@ DocumentSource = Callable[[str, bool], "Path | None"]
 # Writes the answer to an open question: (question, most characters or 0, is
 # it a one-line box). None leaves the question for the student.
 EssayWriter = Callable[[str, int, bool], "str | None"]
+# Settles what it can of the questions nothing saved answers, from the
+# student's profile. Takes [{"id", "question", "choices" or None, "pick":
+# "one" | "any" | "text"}] and returns {id: (answer, where it comes from)}.
+WorkOut = Callable[["list[dict[str, Any]]"], "dict[int, tuple[Any, str]]"]
 
 
 @dataclass
@@ -554,6 +620,7 @@ class FormReport:
     missing: list[str] = field(default_factory=list)
     attached: set[str] = field(default_factory=set)
     written: list[tuple[str, str]] = field(default_factory=list)  # (question, the answer written for it)
+    worked: list[tuple[str, str, str]] = field(default_factory=list)  # (question, answer, the profile fact behind it)
 
 
 class EmployerSite:
@@ -581,6 +648,7 @@ class EmployerSite:
         self.learned: list[dict[str, Any]] = []
         self.attached: set[str] = set()
         self._handled: set[tuple[str, str, str]] = set()
+        self._given: set[tuple[str, str, str]] = set()  # questions this code answered, to notice a wiped one
         self._extra_tabs: list[Any] = []
         self._essays: EssayWriter | None = None
 
@@ -589,8 +657,11 @@ class EmployerSite:
     def open(self, url: str) -> tuple[str, str]:
         """Go to a posting's form. Returns (state, note); state "form" means ready to fill.
 
-        Other states: needs_account, closed, no_form, needs_manual, failed.
+        Other states: needs_account, closed, no_form, needs_manual, failed, and
+        stopped (the tab is gone; nothing more can be done in it).
         """
+        if not self.alive():
+            return "stopped", "the browser tab was closed"
         self._reset()
         kind, name = site_kind(url)
         if kind == "account":
@@ -600,6 +671,8 @@ class EmployerSite:
         except PlaywrightTimeout:
             return "failed", "the employer's page took too long to open"
         except Exception as exc:
+            if not self.alive():
+                return "stopped", "the browser tab was closed"
             return "failed", f"the employer's page wouldn't open ({type(exc).__name__})"
         self._settle()
         if not self._pass_security_check():
@@ -609,6 +682,8 @@ class EmployerSite:
             kind, name = site_kind(self.page.url)
             if kind == "account":
                 return "needs_account", f"{name} wants you to sign in with your own account"
+            if kind == "other" and SIGN_IN_PATH.search(urlparse(self.page.url).path):
+                return "needs_account", "the site asks you to sign in first"
             password = closed = False
             # Some forms are drawn a few seconds after the page arrives, so look more than once.
             for _look in range(12 if kind in FORM_SITES else 5):
@@ -622,7 +697,9 @@ class EmployerSite:
                         self.frame = frame
                         self.root = info.get("selector") or ""
                         self.flavor = info.get("flavor") or (kind if kind in FORM_SITES else "")
-                        return "form", SITE_NAMES.get(self.flavor, "a form this tool hasn't seen before")
+                        if self._is_application():
+                            return "form", SITE_NAMES.get(self.flavor, "a form this tool hasn't seen before")
+                        self.frame, self.root, self.flavor = self.page.main_frame, "", ""
                 closed = "error=true" in self.page.url or bool(CLOSED_TEXT.search(self._text(self.page.main_frame)))
                 if password or closed:
                     break
@@ -639,6 +716,24 @@ class EmployerSite:
             break
         return "no_form", "couldn't find an application form on the page"
 
+    def alive(self) -> bool:
+        """False once the student has closed this tab, or the whole browser."""
+        try:
+            return not self.home.is_closed()
+        except Exception:
+            return False
+
+    def _is_application(self) -> bool:
+        """A careers page has search and job-alert boxes too; an application asks who you are."""
+        fields = self.scan()
+        if self.flavor:
+            return len(fields) >= 2
+        if any(f["kind"] == "file" for f in fields):
+            return len(fields) >= 3
+        labels = " | ".join(f["label"] for f in fields)
+        return len(fields) >= 4 and bool(re.search(r"\bname\b", labels, re.IGNORECASE)) and bool(
+            re.search(r"e-?mail", labels, re.IGNORECASE))
+
     def _reset(self) -> None:
         for tab in self._extra_tabs:
             try:
@@ -651,6 +746,7 @@ class EmployerSite:
         self.root = self.flavor = ""
         self.attached = set()
         self._handled = set()
+        self._given = set()
 
     def _frames(self) -> list[Any]:
         main = self.page.main_frame
@@ -771,7 +867,10 @@ class EmployerSite:
     def missing_required(self) -> list[str]:
         """Required questions still empty, as the student would read them."""
         missing: list[str] = []
-        for item in self.scan():
+        fields = self.scan()
+        if not fields:  # the tab was closed or went elsewhere: never mistake that for a finished form
+            return ["the form itself, which can no longer be read"]
+        for item in fields:
             if not item["required"] or not item["empty"]:
                 continue
             label = item["label"] or "a field with no label"
@@ -786,11 +885,15 @@ class EmployerSite:
 
     # -------------------------------------------------------------- filling
 
-    def fill(self, documents: DocumentSource, essays: EssayWriter | None = None) -> FormReport:
-        """Answer everything there is a saved answer for, asking about the rest.
+    def fill(self, documents: DocumentSource, essays: EssayWriter | None = None,
+             work_out: WorkOut | None = None) -> FormReport:
+        """Fill the form in. Returns what was done and what is still empty.
 
-        With `essays`, open questions that have no saved answer are written
-        from the student's profile instead of being asked.
+        Each question is answered from the first of these that has an answer:
+        the student's saved answers and profile facts; for an open question,
+        an answer written from their profile (`essays`); what `work_out` can
+        settle from the profile for the questions still left; and only then
+        the student, at the keyboard.
         """
         report = FormReport()
         self._essays = essays
@@ -807,19 +910,57 @@ class EmployerSite:
             todo = [i for i in self.scan() if self._key(i) not in self._handled]
             if not todo:
                 break
+            waiting = []
             for item in todo:
                 self._handled.add(self._key(item))
-                try:
-                    self._answer(item, report, overwrite=round_number == 0)
-                except Exception as exc:  # one awkward control never stops the form
-                    self.say(f"  [note] couldn't fill in \"{item['label'][:60]}\" ({type(exc).__name__})")
-            try:
-                self.page.wait_for_timeout(500)
-            except Exception:
-                break
+                if not self._try(item, report, overwrite=round_number == 0) and self._needs_answer(item):
+                    waiting.append(self._key(item))
+            if waiting and work_out is not None:
+                self._work_out(waiting, work_out, report)
+            if waiting and self.ask is not None:
+                for item in self.scan():
+                    if self._key(item) in waiting and self._needs_answer(item):
+                        self._try(item, report, overwrite=False, ask=True)
+            self._pause(500)
+        self._repair()
         report.attached = set(self.attached)
         report.missing = self.missing_required()
         return report
+
+    def _pause(self, ms: int) -> None:
+        try:
+            self.page.wait_for_timeout(ms)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _needs_answer(item: dict[str, Any]) -> bool:
+        return bool(item["required"] and item["empty"] and item["label"]
+                    and item["kind"] != "file" and not NEVER_FILL.search(item["label"]))
+
+    def _try(self, item: dict[str, Any], report: FormReport, overwrite: bool, ask: bool = False) -> bool:
+        """Answer one question if there is an answer for it. True when it now has one."""
+        try:
+            answered = self._answer(item, report, overwrite, ask)
+        except Exception as exc:  # one awkward control never stops the form
+            self.say(f"  [note] couldn't fill in \"{item['label'][:60]}\" ({type(exc).__name__})")
+            return False
+        if answered and item["empty"]:
+            self._given.add(self._key(item))
+        return answered
+
+    def _repair(self) -> None:
+        """Give again any answer the site wiped.
+
+        Some sites redraw the form once they finish reading the resume, which
+        empties questions that were already answered.
+        """
+        self._pause(1000)
+        wiped = [i for i in self.scan() if i["empty"] and self._key(i) in self._given]
+        for item in wiped:
+            self._try(item, FormReport(), overwrite=False)
+        if wiped:
+            self._pause(500)
 
     def _attach(self, item: dict[str, Any], documents: DocumentSource, report: FormReport) -> None:
         kind = document_kind(item["label"], item.get("hint", ""))
@@ -851,10 +992,7 @@ class EmployerSite:
                 return
             if not busy:
                 break
-        try:
-            self.page.wait_for_timeout(800)
-        except Exception:
-            pass
+        self._pause(800)
 
     def _saved(self, label: str) -> list[dict[str, Any]]:
         return candidates(label, self.answers)
@@ -869,20 +1007,71 @@ class EmployerSite:
             return None
         return self.ask(label, options, many)
 
-    def _answer(self, item: dict[str, Any], report: FormReport, overwrite: bool) -> None:
+    def _work_out(self, waiting: list[tuple[str, str, str]], work_out: WorkOut, report: FormReport) -> None:
+        """Put the questions nothing saved answers to `work_out`, and fill in what it settles."""
+        fields = {self._key(i): i for i in self.scan()}
+        questions: list[dict[str, Any]] = []
+        asked: dict[int, tuple[str, str, str]] = {}
+        for key in waiting:
+            item = fields.get(key)
+            if item is None or not self._needs_answer(item):
+                continue
+            if essay_answers.is_essay(item["label"], item["kind"], True):
+                continue  # written by the essay writer, or left for the student
+            choices = item["options"] or (self._list_options(item) if item["kind"] == "combobox" else [])
+            number = len(questions) + 1
+            questions.append({
+                "id": number, "question": item["label"], "choices": choices or None,
+                "pick": "any" if item["kind"] == "checkboxes" else ("one" if choices else "text"),
+            })
+            asked[number] = key
+        if not questions:
+            return
+        try:
+            found = work_out(questions)
+        except Exception as exc:  # never let this stop the form; the questions are asked instead
+            self.say(f"  [note] couldn't work out answers from your profile ({type(exc).__name__})")
+            return
+        settled: dict[tuple[str, str, str], tuple[str, str]] = {}
+        for number, (value, because) in found.items():
+            key = asked.get(number)
+            if key is None:
+                continue
+            text = "; ".join(str(v) for v in value) if isinstance(value, list) else str(value)
+            # Kept for this run, so the same question on the next form needs no
+            # working out. Not saved to the profile: the student didn't say it.
+            self.answers.append({"match": [norm(fields[key]["label"])], "value": text, "exact": True})
+            settled[key] = (text, because)
+        for item in self.scan():
+            key = self._key(item)
+            if key in settled and self._needs_answer(item) and self._try(item, report, overwrite=False):
+                report.worked.append((item["label"], settled[key][0], settled[key][1]))
+
+    def _list_options(self, item: dict[str, Any]) -> list[str]:
+        """The choices in a list that has to be opened to see them; none for one that searches as you type."""
+        try:
+            control = self._control(item)
+            control.scroll_into_view_if_needed()
+            control.click()
+            _, texts = self._open_options()
+            self.page.keyboard.press("Escape")
+        except Exception:
+            return []
+        return texts if 0 < len(texts) <= 150 else []
+
+    def _answer(self, item: dict[str, Any], report: FormReport, overwrite: bool, ask: bool = False) -> bool:
         label, kind = item["label"], item["kind"]
         if not label or NEVER_FILL.search(label):
-            return  # a required one shows up as still empty, for the student
+            return False  # a required one shows up as still empty, for the student
         if kind in ("text", "textarea"):
-            self._answer_text(item, report, overwrite)
-        elif kind == "combobox":
-            self._answer_combobox(item, report)
-        elif kind == "checkboxes":
-            self._answer_many(item, report)
-        else:
-            self._answer_choice(item, report)
+            return self._answer_text(item, report, overwrite, ask)
+        if kind == "combobox":
+            return self._answer_combobox(item, report, ask)
+        if kind == "checkboxes":
+            return self._answer_many(item, report, ask)
+        return self._answer_choice(item, report, ask)
 
-    def _answer_text(self, item: dict[str, Any], report: FormReport, overwrite: bool) -> None:
+    def _answer_text(self, item: dict[str, Any], report: FormReport, overwrite: bool, ask: bool) -> bool:
         label = item["label"]
         saved = self._saved(label)
         if item["empty"]:
@@ -892,23 +1081,24 @@ class EmployerSite:
                 value = self._essays(label, int(item.get("max") or 0), item["kind"] == "text") or None
                 if value:
                     report.written.append((label, value))
-            if value is None and item["required"]:
+            if value is None and ask and item["required"]:
                 given = self._ask(label)
                 if given:
                     value = str(given)
                     self._learn(label, value)
+            if not value:
+                return False
         else:
             # Something is there already, usually read from the resume by the
             # site. A saved answer replaces it; otherwise it's left alone.
             value = str(saved[0]["value"]) if saved and overwrite else None
-            if value is not None and _loose(value) == _loose(item.get("value", "")):
-                return
-        if not value:
-            return
+            if not value or _loose(value) == _loose(item.get("value", "")):
+                return True
         self._control(item).fill(value)
         report.filled.append(f"{label[:60]}: {value[:60]}")
+        return True
 
-    def _choose(self, item: dict[str, Any], want_many: bool = False) -> list[int]:
+    def _choose(self, item: dict[str, Any], ask: bool, want_many: bool = False) -> list[int]:
         """Indexes of the options the student's answers mean."""
         label, options = item["label"], item["options"]
         for answer in self._saved(label):
@@ -916,7 +1106,7 @@ class EmployerSite:
             picked = [i for i in (pick_option(options, v) for v in values) if i is not None]
             if picked:
                 return picked
-        if not item["required"] or not item["empty"]:
+        if not (ask and item["required"]):
             return []
         given = self._ask(label, options, want_many)
         if not given:
@@ -927,25 +1117,25 @@ class EmployerSite:
             self._learn(label, "; ".join(options[i] for i in picked))
         return picked
 
-    def _answer_choice(self, item: dict[str, Any], report: FormReport) -> None:
+    def _answer_choice(self, item: dict[str, Any], report: FormReport, ask: bool) -> bool:
         if not item["empty"]:
-            return
-        picked = self._choose(item)
+            return True
+        picked = self._choose(item, ask)
         if not picked:
-            return
+            return False
         index, kind = picked[0], item["kind"]
         choice = item["options"][index]
         if kind == "select":
             self._control(item).select_option(label=self._select_text(item, choice))
         elif kind == "checkbox":
-            if index != 0:  # "No": leave it unticked
-                return
-            self._tick(self._option(item, 0))
+            if index == 0:  # "No" leaves it unticked
+                self._tick(self._option(item, 0))
         elif kind == "radio":
             self._tick(self._option(item, index))
         else:  # a pair of buttons
             self._option(item, index).click()
         report.filled.append(f"{item['label'][:60]}: {choice[:60]}")
+        return True
 
     def _select_text(self, item: dict[str, Any], choice: str) -> str:
         """The option's text exactly as the page has it (the scan tidies spaces)."""
@@ -954,14 +1144,15 @@ class EmployerSite:
                 return text
         return choice
 
-    def _answer_many(self, item: dict[str, Any], report: FormReport) -> None:
+    def _answer_many(self, item: dict[str, Any], report: FormReport, ask: bool) -> bool:
         if not item["empty"]:
-            return
-        picked = self._choose(item, want_many=True)
+            return True
+        picked = self._choose(item, ask, want_many=True)
         for index in picked:
             self._tick(self._option(item, index))
         if picked:
             report.filled.append(f"{item['label'][:60]}: " + "; ".join(item["options"][i][:40] for i in picked))
+        return bool(picked)
 
     def _tick(self, control: Any) -> None:
         try:
@@ -1027,31 +1218,33 @@ class EmployerSite:
         self.page.wait_for_timeout(250)
         return texts[index], seen
 
-    def _answer_combobox(self, item: dict[str, Any], report: FormReport) -> None:
+    def _answer_combobox(self, item: dict[str, Any], report: FormReport, ask: bool) -> bool:
         if not item["empty"]:
-            return
+            return True
         label, control = item["label"], self._control(item)
         control.scroll_into_view_if_needed()
         seen: list[str] = []
-        for answer in self._saved(label)[:3]:
+        for answer in self._saved(label)[:4]:
             chosen, seen_now = self._pick_from_list(control, str(answer["value"]))
             seen = seen or seen_now
             if chosen is not None:
                 report.filled.append(f"{label[:60]}: {chosen[:60]}")
-                return
-        if not item["required"]:
-            return
+                return True
+        if not (ask and item["required"]):
+            return False
         if not seen:
             control.click()
             _, seen = self._open_options()
             self.page.keyboard.press("Escape")
         given = self._ask(label, seen if 0 < len(seen) <= 40 else None)
         if not given:
-            return
+            return False
         chosen, _ = self._pick_from_list(control, str(given))
-        if chosen is not None:
-            self._learn(label, chosen)
-            report.filled.append(f"{label[:60]}: {chosen[:60]}")
+        if chosen is None:
+            return False
+        self._learn(label, chosen)
+        report.filled.append(f"{label[:60]}: {chosen[:60]}")
+        return True
 
     # ------------------------------------------------------------- sending
 
