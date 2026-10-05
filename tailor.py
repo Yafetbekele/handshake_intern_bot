@@ -208,18 +208,22 @@ def find_claude() -> str | None:
         return on_path
     appdata = os.environ.get("APPDATA", "")
     local = os.environ.get("LOCALAPPDATA", "")
-    candidates = glob.glob(os.path.join(appdata, "Claude", "claude-code", "*", "claude.exe"))
     # The Microsoft Store version of the Claude app keeps its files in a
     # redirected folder that programs started outside the app can't see at
     # the usual path.
-    candidates += glob.glob(
-        os.path.join(local, "Packages", "Claude_*", "LocalCache", "Roaming", "Claude", "claude-code", "*", "claude.exe")
-    )
+    homes = [os.path.join(appdata, "Claude", "claude-code")]
+    homes += glob.glob(os.path.join(local, "Packages", "Claude_*", "LocalCache", "Roaming", "Claude", "claude-code"))
+    candidates = []
+    for home in homes:
+        # <version>\claude.exe, or since late 2026 <version>\<build>\claude.exe.
+        candidates += glob.glob(os.path.join(home, "*", "claude.exe"))
+        candidates += glob.glob(os.path.join(home, "*", "*", "claude.exe"))
     candidates += glob.glob(os.path.join(os.path.expanduser("~"), ".local", "bin", "claude.exe"))
 
     def version_key(p: str) -> tuple[int, ...]:
-        parts = re.findall(r"\d+", Path(p).parent.name)
-        return tuple(int(x) for x in parts)
+        folders = Path(p).parts
+        version = folders[folders.index("claude-code") + 1] if "claude-code" in folders else Path(p).parent.name
+        return tuple(int(x) for x in re.findall(r"\d+", version))
 
     return max(candidates, key=version_key) if candidates else None
 
