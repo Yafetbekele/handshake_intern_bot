@@ -595,6 +595,10 @@ try:
         why = last("/ashby")["fields"]["f-why"][0]
         check("the employer received the checked answer, without the invented parts",
               "weather station" in why and "hackathon" not in why and "Kubernetes" not in why, why)
+        essays_page = (listing / "Essays.html").read_text(encoding="utf-8") if (listing / "Essays.html").exists() else ""
+        check("every essay is gathered on one page in the results folder, under its job and what happened to it",
+              "Why do you want to work at Acme?" in essays_page and "weather station" in essays_page
+              and "Embedded Intern" in essays_page and ">applied<" not in essays_page and "applied" in essays_page, essays_page[-600:])
         check("the answer is kept with that job's documents",
               "weather station" in (WORK / "tailored" / "ab-acme-1-acme" / "written_answers.txt").read_text(encoding="utf-8"))
 

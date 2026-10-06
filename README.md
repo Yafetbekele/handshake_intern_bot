@@ -361,6 +361,9 @@ job, from `profile/career_profile.json` and your baseline cover letter.
   form for you to edit before you say yes. In automatic mode the form is sent
   with it, unread; add `--hold-essays` to have automatic mode keep those forms
   back for you instead.
+- **All in one place:** "Essays.html" in the apply-yourself folder holds every
+  essay written so far, newest first, under its job, with the posting's link
+  and what happened to that application. It's rewritten after every run.
 - **Kept per job** in `tailored_resumes/<job>/written_answers.txt` (and
   `.json`, which a later run reuses; edit it to change what gets filled in).
 - **Never written:** sponsorship, pay, demographic and other personal or legal

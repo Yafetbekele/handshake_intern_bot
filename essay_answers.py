@@ -214,10 +214,106 @@ def answer(
                         max_chars=max_chars, single_line=single_line, exe=exe)
     if text is None:
         return EssayResult("", "none", notes)
-    saved[_key(question)] = {"question": question, "answer": text, "notes": notes}
+    saved[_key(question)] = {"question": question, "answer": text, "notes": notes,
+                             "job": {"id": job_id, "title": title, "employer": employer}}
     folder.mkdir(parents=True, exist_ok=True)
     record_path.write_text(json.dumps(saved, indent=2, ensure_ascii=False), encoding="utf-8")
     (folder / "written_answers.txt").write_text(
         "\n\n".join(f"{entry['question']}\n\n{entry['answer']}" for entry in saved.values()) + "\n", encoding="utf-8"
     )
     return EssayResult(text, "ai", notes)
+
+
+# ------------------------------------------------------------------ the page
+
+
+def _job_of(folder: Path, entries: dict[str, Any], about: dict[str, dict[str, str]]) -> dict[str, str]:
+    """What is known about the job a folder of answers belongs to."""
+    known = max((key for key in about if folder.name.startswith(key + "-") or folder.name == key), key=len, default="")
+    job = dict(about.get(known, {}))
+    for entry in entries.values():
+        for field_name in ("title", "employer"):
+            job.setdefault(field_name, str((entry.get("job") or {}).get(field_name) or ""))
+    for other in ("cover_letter.json", "plan.json"):  # written for the same job, and they name it
+        if job.get("title") and job.get("employer"):
+            break
+        try:
+            named = json.loads((folder / other).read_text(encoding="utf-8")).get("job") or {}
+        except (OSError, ValueError):
+            continue
+        job["title"] = job.get("title") or str(named.get("title") or "")
+        job["employer"] = job.get("employer") or str(named.get("employer") or "")
+    job["title"] = job.get("title") or folder.name
+    return job
+
+
+def write_page(folder: str | Path, about: dict[str, dict[str, str]] | None = None,
+               out_dir: str | Path = tailor.OUT_DIR) -> Path:
+    """One page holding every answer written so far, the newest job first.
+
+    `about` maps a job's folder id to what the run knows of it: title,
+    employer, link and what happened to the application.
+    """
+    from datetime import date, datetime
+    from html import escape
+
+    about = about or {}
+    jobs = []
+    for record_path in Path(out_dir).glob("*/written_answers.json"):
+        try:
+            entries = json.loads(record_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        entries = {k: v for k, v in entries.items() if isinstance(v, dict) and str(v.get("answer") or "").strip()}
+        if entries:
+            jobs.append((record_path.stat().st_mtime, _job_of(record_path.parent, entries, about), entries))
+    jobs.sort(key=lambda job: -job[0])
+
+    blocks = []
+    for written, job, entries in jobs:
+        heading = escape(job["title"]) + (f" <span class='at'>@ {escape(job['employer'])}</span>" if job.get("employer") else "")
+        if job.get("link"):
+            heading = f"<a href='{escape(job['link'], quote=True)}' target='_blank' rel='noopener'>{heading}</a>"
+        facts = [f"written {datetime.fromtimestamp(written).strftime('%B %d').replace(' 0', ' ')}"]
+        if job.get("status"):
+            facts.insert(0, escape(job["status"]))
+        answers = []
+        for entry in entries.values():
+            paragraphs = "".join(f"<p>{escape(p)}</p>" for p in str(entry["answer"]).split("\n\n"))
+            cut = [n for n in entry.get("notes") or [] if "dropped" in n]
+            note = f"<div class='why'>{escape('; '.join(cut))}</div>" if cut else ""
+            answers.append(f"<h3>{escape(str(entry.get('question') or ''))}</h3>{paragraphs}{note}")
+        blocks.append(f"<section><h2>{heading}</h2><div class='why'>{' · '.join(facts)}</div>{''.join(answers)}</section>")
+
+    count = sum(len(entries) for _, _, entries in jobs)
+    page = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Essays</title>
+<style>
+  :root {{ color-scheme: light dark; --fg:#1b1b1f; --muted:#5f6068; --line:#e3e3e8; --bg:#fff; --accent:#1f5fd6; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --fg:#ececf1; --muted:#a4a5ad; --line:#34343b; --bg:#17171b; --accent:#8ab4ff; }} }}
+  body {{ margin:0; padding:24px 16px; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
+  main {{ max-width:820px; margin:0 auto; }}
+  h1 {{ font-size:22px; margin:0 0 4px; }}
+  h2 {{ font-size:17px; margin:0 0 2px; }}
+  h3 {{ font-size:15px; margin:16px 0 4px; }}
+  p {{ margin:0 0 10px; }}
+  .lead {{ color:var(--muted); margin:0 0 20px; }}
+  section {{ border-top:1px solid var(--line); padding:18px 0; }}
+  a {{ color:var(--accent); text-decoration:none; }}
+  a:hover {{ text-decoration:underline; }}
+  .at {{ font-weight:400; }}
+  .why {{ color:var(--muted); font-size:13px; }}
+</style></head>
+<body><main>
+<h1>Essays</h1>
+<p class="lead">{count} answers written for {len(jobs)} applications, from your profile, newest first.
+Updated {date.today().strftime('%B %d, %Y').replace(' 0', ' ')}. Each one is kept with its job in
+<code>tailored_resumes</code>; edit <code>written_answers.json</code> there to change what a later run fills in.</p>
+{chr(10).join(blocks) or "<section>No essays written yet.</section>"}
+</main></body></html>
+"""
+    out = Path(folder) / "Essays.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(page, encoding="utf-8")
+    return out

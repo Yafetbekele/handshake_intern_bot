@@ -459,6 +459,21 @@ def ask_settings(args: argparse.Namespace) -> None:
     print()
 
 
+def write_essays_page(record: Record) -> Path | None:
+    """Every essay written so far, on one page in the results folder. None when there are none yet."""
+    if not any(tailor.OUT_DIR.glob("*/written_answers.json")):
+        return None
+    about = {
+        Papers._folder_id({"id": posting_id}): {
+            "title": entry.get("title", ""), "employer": entry.get("employer", ""),
+            "link": entry.get("link") or entry.get("listing", ""),
+            "status": SAYS.get(entry.get("status", ""), entry.get("status", "")),
+        }
+        for posting_id, entry in record.entries.items()
+    }
+    return essay_answers.write_page(manual_list().folder, about)
+
+
 def show_questions(interactive: bool) -> int:
     """List the questions the forms couldn't be answered on, and take answers to them."""
     answers, profile_path = load_answers()
@@ -799,6 +814,10 @@ def main(argv: list[str] | None = None) -> int:
                     time.sleep(pause)
     finally:
         results = record.write_csv(listing.folder) if record.entries else None
+        try:
+            essays_page = write_essays_page(record)
+        except Exception:  # a page for reading; never worth failing a run over
+            essays_page = None
 
     banner("Where they apply" if args.links_only else "Run summary")
     if args.links_only:
@@ -810,6 +829,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {count:3d}  {SAYS.get(status, status)}")
     if results is not None:
         print(f"\nEvery posting tried so far, with its employer link: {results}")
+    if essays_page is not None and not args.links_only:
+        print(f"Every essay written for you so far: {essays_page}")
     if not args.links_only:
         open_questions = unanswered.ranked(load_answers()[0])
         if open_questions:
