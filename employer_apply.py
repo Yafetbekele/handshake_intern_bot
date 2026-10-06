@@ -544,8 +544,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="leave a question I don't answer empty, instead of using best judgement on it")
     parser.add_argument("--no-essays", action="store_true",
                         help="don't write answers to open questions; ask you, or leave them for you")
-    parser.add_argument("--send-essays", action="store_true",
-                        help="with --auto-submit, also send forms that hold a written answer you haven't read")
+    parser.add_argument("--hold-essays", action="store_true",
+                        help="with --auto-submit, don't send a form that holds a written answer you haven't read")
+    parser.add_argument("--send-essays", action="store_true", help=argparse.SUPPRESS)  # now what happens anyway
     parser.add_argument("--no-ai", action="store_true",
                         help="tailor with rules only, and write no letters or answers with Claude")
     parser.add_argument("--answer-timeout", type=float, default=None,
@@ -614,7 +615,7 @@ def main(argv: list[str] | None = None) -> int:
               + ("the rest are worked out from your profile with Claude, then " if papers.working_out else "the rest are ")
               + ("asked here and remembered" if ask else "left for you"))
         print("  essays   : " + ("open questions are answered from your profile with Claude, fact checked"
-                                + ("" if not auto or args.send_essays else "; those forms wait for you to read")
+                                + ("; those forms wait for you to read" if auto and args.hold_essays else "")
                                 if papers.essays else "not written; asked, or left for you"))
         print("  never    : passwords, Social Security numbers, bank details, or a security check")
     if not args.links_only and (papers.essays or papers.working_out or papers.guessing):
@@ -754,9 +755,9 @@ def main(argv: list[str] | None = None) -> int:
                     elif site.flavor not in FORM_SITES:
                         status, note = "needs_manual", ("a kind of form this tool hasn't seen before; "
                                                         "run without --auto-submit to check it yourself")
-                    elif report.written and not args.send_essays:
+                    elif report.written and args.hold_essays:
                         status, note = "needs_manual", ("holds a written answer for you to read first; run without "
-                                                        "--auto-submit to see it, or add --send-essays")
+                                                        "--auto-submit to see it, or without --hold-essays to send it")
                     else:
                         status, note = site.submit()
                         handled += 1

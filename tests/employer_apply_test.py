@@ -582,15 +582,16 @@ try:
         check("and marks nothing applied", applied_myself.ids() == set())
 
         # The Ashby form is first on the list and has an optional "Why do you want to work at Acme?".
-        code = employer_apply.main(["--list", "elsewhere", "--auto-submit", "--top", "1"] + common)
+        code = employer_apply.main(["--list", "elsewhere", "--auto-submit", "--hold-essays", "--top", "1"] + common)
         log = json.loads((data / "employer_applications.json").read_text(encoding="utf-8"))
-        check("automatic mode holds a form with a written answer nobody has read",
+        check("with --hold-essays, automatic mode keeps back a form with a written answer nobody has read",
               code == 0 and log["ab-acme-1"]["status"] == "needs_manual" and "written answer" in log["ab-acme-1"]["note"], log.get("ab-acme-1"))
         check("and sends nothing", len(fake_employer_sites.SUBMISSIONS) == sent_before)
         typed = iter(["yes"])
-        code = employer_apply.main(["--list", "elsewhere", "--auto-submit", "--send-essays", "--top", "1"] + common)
+        code = employer_apply.main(["--list", "elsewhere", "--auto-submit", "--top", "1"] + common)
         log = json.loads((data / "employer_applications.json").read_text(encoding="utf-8"))
-        check("with --send-essays it goes out", code == 0 and log["ab-acme-1"]["status"] == "applied", log.get("ab-acme-1"))
+        check("without it, automatic mode sends a form with a written answer, and a held one is picked up again",
+              code == 0 and log["ab-acme-1"]["status"] == "applied", log.get("ab-acme-1"))
         why = last("/ashby")["fields"]["f-why"][0]
         check("the employer received the checked answer, without the invented parts",
               "weather station" in why and "hackathon" not in why and "Kubernetes" not in why, why)

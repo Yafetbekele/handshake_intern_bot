@@ -356,10 +356,11 @@ job, from `profile/career_profile.json` and your baseline cover letter.
   question is asked or left for you.
 - **Length** is about 70 to 120 words, or whatever the question or the box
   allows ("150 words max", a character limit).
-- **You see it before it goes.** The answer is printed in the black window and
-  sits in the form for you to edit. In automatic mode a form holding a written
-  answer waits for you instead of being sent; add `--send-essays` to send
-  those unread.
+- **Where you see it.** The answer is printed in the black window (and kept in
+  `data/employer_run_log.txt`). In "asking before each one" mode it sits in the
+  form for you to edit before you say yes. In automatic mode the form is sent
+  with it, unread; add `--hold-essays` to have automatic mode keep those forms
+  back for you instead.
 - **Kept per job** in `tailored_resumes/<job>/written_answers.txt` (and
   `.json`, which a later run reuses; edit it to change what gets filled in).
 - **Never written:** sponsorship, pay, demographic and other personal or legal
