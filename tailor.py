@@ -241,7 +241,9 @@ def claude_ready(exe: str | None = None) -> tuple[bool, str]:
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
         return False, f"Could not check Claude Code sign-in ({type(exc).__name__})."
     if not status.get("loggedIn"):
-        return False, f'Claude Code is not signed in. Run once:  "{exe}" auth login'
+        # Quotes around the path stop PowerShell running it, so they're only used when a space needs them.
+        command = f"{exe} auth login" if " " not in str(exe) else f'& "{exe}" auth login'
+        return False, f"Claude Code is not signed in. Run once, in PowerShell:  {command}"
     return True, "Claude Code is signed in."
 
 
