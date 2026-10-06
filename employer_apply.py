@@ -56,6 +56,12 @@ from main import DATA_DIR, banner, load_config, load_selectors, manual_list
 # Not offered again on later runs (--retry brings back everything but "applied").
 SETTLED = {"applied", "declined", "uncertain", "needs_account", "closed", "no_form"}
 
+# The most forms one run will fill in, however many are asked for.
+MOST_PER_RUN = 500
+
+OUT_OF_CLAUDE_MESSAGE = ("\nClaude has reached its usage limit for now, so answers can't be worked out or written. "
+                         "The run stops here rather than fill forms in badly; run again once the limit resets.")
+
 CLOSED_MESSAGE = ("\nThe browser window was closed, so the run stops here. "
                   "What was done is saved; run again to carry on.")
 
@@ -209,6 +215,13 @@ class Papers:
         self.can_write = tailor.PROFILE_PATH.exists()
         self.essays = self.can_write and self.allow_ai and not getattr(args, "no_essays", False)
         self.working_out = self.can_write and self.allow_ai and not getattr(args, "ask_me", False)
+        self.guessing = self.can_write and self.allow_ai and not getattr(args, "no_guessing", False)
+        self.out_of_claude = False  # Claude said it has hit its usage limit; nothing more can be written this run
+
+    def _heard(self, notes: list[str]) -> None:
+        """Notice Claude saying it has reached its usage limit."""
+        if any("claude code error" in n.lower() and "limit" in n.lower() for n in notes):
+            self.out_of_claude = True
 
     @staticmethod
     def _existing(*paths: Any) -> Path | None:
@@ -281,6 +294,7 @@ class Papers:
             except Exception as exc:  # never let an essay stop an application
                 print(f"  [warn] couldn't write it ({type(exc).__name__})")
                 return None
+            self._heard(result.notes)
             for note in result.notes[:3]:
                 print(f"    {note}")
             return result.text or None
@@ -300,11 +314,32 @@ class Papers:
             # Read afresh, so answers you typed earlier in this run count too.
             profile = tailor.load_profile(tailor.PROFILE_PATH)
             settled, notes = form_answers.work_out(questions, profile, posting["title"], posting["employer"], found_on)
+            self._heard(notes)
             for note in notes[:4]:
                 print(f"    not used: {note}")
             return settled
 
         return settle
+
+    def guesses_for(self, posting: dict[str, Any]) -> WorkOut | None:
+        """Best judgement for questions you were asked and left, or None when that's off."""
+        if not self.guessing:
+            return None
+        found_on = "Handshake" if posting["source"] == "ranked" else "the company's own careers website"
+
+        def judge(questions: list[dict[str, Any]]) -> dict[int, tuple[Any, str]]:
+            if not self._use_ai():
+                return {}
+            print(f"  using its best judgement on {len(questions)} question{'s' if len(questions) != 1 else ''} you left...")
+            profile = tailor.load_profile(tailor.PROFILE_PATH)
+            settled, notes = form_answers.work_out(questions, profile, posting["title"], posting["employer"], found_on,
+                                                   best_guess=True, job_text=posting["description"])
+            self._heard(notes)
+            for note in notes[:4]:
+                print(f"    left empty: {note}")
+            return settled
+
+        return judge
 
     def for_posting(self, posting: dict[str, Any]) -> DocumentSource:
         def give(kind: str, required: bool) -> Path | None:
@@ -325,8 +360,9 @@ class Papers:
 class Questions:
     """Puts a form's unanswered questions to the student at the keyboard."""
 
-    def __init__(self, timeout: float) -> None:
+    def __init__(self, timeout: float, unanswered: str = "it's left for you to fill in in the browser") -> None:
         self.timeout = timeout
+        self.unanswered = unanswered  # what happens to a question that gets no answer
         self.quiet = False  # nobody answered; stop asking about this form
 
     def reset(self) -> None:
@@ -341,10 +377,10 @@ class Questions:
             for number, option in enumerate(options, start=1):
                 print(f"    {number}. {option}")
             how = "the numbers, with commas between them" if many else "the number"
-        print(f"  Type {how} and press Enter. Just Enter leaves it for you to fill in in the browser.")
+        print(f"  Type {how} and press Enter. With just Enter, {self.unanswered}.")
         reply = prompts.ask("  Your answer: ", self.timeout)
         if reply is None:
-            print("  No answer, so the rest of this form is left for you.")
+            print("  No answer, so it won't ask about the rest of this form.")
             self.quiet = True
             return None
         reply = reply.strip()
@@ -410,9 +446,9 @@ def ask_settings(args: argparse.Namespace) -> None:
           "  3. Apply automatically to every form it can complete")
     mode = choice("Type 1, 2 or 3 [2]: ", "123", "2")
     args.dry_run, args.auto_submit = mode == "1", mode == "3"
-    reply = (prompts.ask(f"\nHow many applications this run? [{args.max}]: ", None) or "").strip()
+    reply = (prompts.ask(f"\nHow many applications this run, up to {MOST_PER_RUN}? [{args.max}]: ", None) or "").strip()
     if reply.isdigit() and int(reply) > 0:
-        args.max = min(int(reply), 100)
+        args.max = min(int(reply), MOST_PER_RUN)
     print()
 
 
@@ -421,8 +457,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", choices=["ranked", "elsewhere", "both"], default="ranked",
                         help='"ranked" is the Handshake list from rank_all.py (the default), '
                              '"elsewhere" the list from find_elsewhere.py')
-    parser.add_argument("--max", type=int, default=10, help="most forms to fill in this run (default 10)")
-    parser.add_argument("--top", type=int, default=100, help="how far down the list to look (default 100)")
+    parser.add_argument("--max", type=int, default=10,
+                        help=f"most forms to fill in this run (default 10, at most {MOST_PER_RUN})")
+    parser.add_argument("--top", type=int, default=0,
+                        help="only look this far down the list (default: the whole list)")
     parser.add_argument("--dry-run", action="store_true", help="fill forms in but never send one")
     parser.add_argument("--auto-submit", action="store_true", help="send complete forms without asking each time")
     parser.add_argument("--links-only", action="store_true", help="only look up where each posting applies")
@@ -435,6 +473,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ask-me", action="store_true",
                         help="ask me every question my saved answers don't cover, instead of working "
                              "the answer out from my profile with Claude")
+    parser.add_argument("--no-guessing", action="store_true",
+                        help="leave a question I don't answer empty, instead of using best judgement on it")
     parser.add_argument("--no-essays", action="store_true",
                         help="don't write answers to open questions; ask you, or leave them for you")
     parser.add_argument("--send-essays", action="store_true",
@@ -463,7 +503,9 @@ def main(argv: list[str] | None = None) -> int:
     done = applied_myself.ids()
     listing = manual_list()
     postings = []
-    for posting in chosen_postings(args.list)[: max(args.top, 0)]:
+    args.max = max(1, min(args.max, MOST_PER_RUN))
+    listed = chosen_postings(args.list)
+    for posting in listed[: args.top] if args.top > 0 else listed:
         status = record.status(posting["id"])
         if posting["id"] in done or status == "applied" or listing.is_removed(posting["id"]):
             continue
@@ -483,7 +525,10 @@ def main(argv: list[str] | None = None) -> int:
     papers = Papers(config, args)
     if papers.resume is None and not args.links_only:
         raise SystemExit("No resume to attach. Pass --resume PATH, or pick one in the launcher once.")
-    ask = Questions(float(config.get("answer_timeout", 60))) if interactive and config.get("answer_questions", True) else None
+    ask = None
+    if interactive and config.get("answer_questions", True):
+        ask = Questions(float(config.get("answer_timeout", 60)),
+                        "it uses its best judgement" if papers.guessing else "it's left for you to fill in in the browser")
     person_present = interactive and not config.get("headless")
 
     banner("Applying on employers' own sites")
@@ -578,11 +623,15 @@ def main(argv: list[str] | None = None) -> int:
                 site_name = note
                 if ask is not None:
                     ask.reset()
-                report = site.fill(papers.for_posting(posting), papers.essays_for(posting), papers.answers_for(posting))
+                report = site.fill(papers.for_posting(posting), papers.essays_for(posting), papers.answers_for(posting),
+                                   papers.guesses_for(posting))
                 saved = remember_answers(profile_path, site.learned)
                 site.learned = []
                 if not site.alive():
                     print(CLOSED_MESSAGE)
+                    break
+                if papers.out_of_claude:
+                    print(OUT_OF_CLAUDE_MESSAGE)
                     break
                 print(f"  filled in {len(report.filled)}: " + "; ".join(f[:70] for f in report.filled[:8])
                       + (" ..." if len(report.filled) > 8 else ""))
@@ -590,6 +639,10 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  written for \"{question[:80]}\":")
                     for paragraph in text.split("\n\n"):
                         print(textwrap.fill(paragraph, width=96, initial_indent="    | ", subsequent_indent="    | "))
+                if report.guessed:
+                    print("  its best judgement, for questions you left (check these):")
+                    for question, value, because in report.guessed:
+                        print(f"    {question[:56]} -> {value[:44]}   ({because[:80]})")
                 if report.worked:
                     print("  worked out from your profile:")
                     for question, value, because in report.worked:
@@ -676,7 +729,37 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+class _Copy:
+    """Sends everything printed to a file as well, so a run can be read back afterwards."""
+
+    def __init__(self, stream: Any, path: Path) -> None:
+        self.stream = stream
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.file = path.open("a", encoding="utf-8")
+        self.file.write(f"\n\n===== run started {datetime.now().isoformat(timespec='seconds')}: {' '.join(sys.argv[1:])}\n")
+
+    def write(self, text: str) -> int:
+        self.stream.write(text)
+        try:
+            self.file.write(text)
+            self.file.flush()
+        except (OSError, ValueError):
+            pass
+        return len(text)
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.stream, name)
+
+
 if __name__ == "__main__":
+    try:
+        # Everything shown in the window is also kept in data/employer_run_log.txt.
+        sys.stdout = _Copy(sys.stdout, DATA_DIR / "employer_run_log.txt")
+    except OSError:
+        pass
     try:
         sys.exit(main())
     except KeyboardInterrupt:

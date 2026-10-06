@@ -356,6 +356,7 @@ def plain_page(action: str, required_essay: bool = False, captcha: bool = False,
                  + choice("felony", "Have you ever been convicted of a felony?", ["Yes", "No"])
                  + box("mgpa", "Master's GPA") + box("majorgpa", "GPA in your major courses only, if you know it")
                  + choice("rel", "Are you related to a current employee?", ["Yes", "No"])
+                 + choice("dis", "Do you have a disability?", ["Yes", "No", "I prefer not to say"])
                  + box("gy2", "Graduation year (four digits), as it will appear on your transcript"))
     check = ""
     if wiping:

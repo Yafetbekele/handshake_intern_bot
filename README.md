@@ -301,6 +301,19 @@ answer for it:
 3. **You.** Only what your profile doesn't settle is asked, with the choices
    numbered. What you type is saved in your profile, and from then on the
    same question from any company can be worked out.
+4. **Its best judgement, for what you leave.** A question you don't answer
+   (just Enter, or nothing typed in 60 seconds, or a run with nobody at the
+   keyboard) isn't left blank. Claude gives the answer most likely to be true
+   of you, from your profile and the posting, and it's printed under "its best
+   judgement (check these)" with the reason. For "do you meet the
+   qualifications" it compares the posting with your profile. These aren't
+   saved to your profile. Two things are still never guessed: a figure that
+   isn't in your profile, and a personal or legal question you've never
+   answered (criminal record, citizenship, disability and so on). For one of
+   those it takes the form's own "prefer not to say" if there is one, and
+   otherwise leaves it empty for you. In automatic mode a form with
+   best-judgement answers is sent like any other, so read the log afterwards.
+   `--no-guessing` turns this off.
 
 Worked-out answers are checked before they're used. One is dropped unless it
 is one of the form's own choices, every figure in it is in your profile, and,
@@ -359,8 +372,11 @@ button on the ranked pages, so it drops off every list. Each posting's outcome
 is kept in `data/employer_applications.json`, and a later run carries on from
 there instead of starting over (`--retry` goes back over earlier ones).
 `--max 10` is how many forms to fill in a run (in automatic mode, how many to
-send); `--top 100` is how far down the list to look. In automatic mode a form
-left for want of an answer isn't opened again until you've saved new answers.
+send), up to 500. It works down the whole list; `--top 50` keeps it to the
+first 50. In automatic mode a form left for want of an answer isn't opened
+again until you've saved new answers. Each form uses one or two Claude
+requests on your plan, so a long run can reach your plan's limit; when Claude
+says it has, the run stops there instead of filling the rest in badly.
 
 ### Marking postings you applied to
 

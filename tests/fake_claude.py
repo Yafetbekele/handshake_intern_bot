@@ -26,10 +26,13 @@ if "-p" in args and "fill in a student's internship application" in " ".join(arg
         print(json.dumps({"is_error": True, "result": "prompt missing questions or profile"}))
         sys.exit(1)
     questions = json.loads(prompt.split(marker, 1)[1].split("\n\nReply with JSON", 1)[0])
+    guessing = "best judgement" in " ".join(args).lower()  # for questions the student left unanswered
     answers = []
     for question in questions:
         text = question["question"].lower()
-        if "how did you hear" in text:
+        if guessing and "related to" in text:
+            answer, because = "No", "no relatives are mentioned anywhere in the profile"
+        elif "how did you hear" in text:
             answer, because = "Handshake", "found on Handshake"
         elif "felony" in text:
             answer, because = "No", "students rarely have one"

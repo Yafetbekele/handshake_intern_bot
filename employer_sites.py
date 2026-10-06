@@ -126,9 +126,14 @@ FOLLOW_UP = re.compile(
 
 
 # "Master's GPA" is not the GPA question, and "highest degree completed" is not
-# the degree being studied for. These too need an answer saved for exactly them.
+# the degree being studied for. And a question turned around ("Is there
+# anything that would prevent you from working on site?") must not get the
+# answer to the plain one. These need an answer saved for exactly them, or to
+# be read properly (form_answers.py), not matched on a phrase.
 NOT_THE_USUAL = re.compile(
-    r"master'?s|doctora|ph\.?\s?d\b|graduate (school|degree)|\bmba\b|high school|highest|completed|obtained|earned|previous",
+    r"master'?s|doctora|ph\.?\s?d\b|graduate (school|degree)|\bmba\b|high school|highest|completed|obtained|earned|previous|"
+    r"\bwithout\b|\bunable\b|\bcannot\b|\bnot (be )?(able|willing|available)\b|prevent|restrict|limitation|conflict|"
+    r"barrier|any reason|\bobject",
     re.IGNORECASE,
 )
 
@@ -621,6 +626,7 @@ class FormReport:
     attached: set[str] = field(default_factory=set)
     written: list[tuple[str, str]] = field(default_factory=list)  # (question, the answer written for it)
     worked: list[tuple[str, str, str]] = field(default_factory=list)  # (question, answer, the profile fact behind it)
+    guessed: list[tuple[str, str, str]] = field(default_factory=list)  # (question, best-judgement answer, why)
 
 
 class EmployerSite:
@@ -886,14 +892,14 @@ class EmployerSite:
     # -------------------------------------------------------------- filling
 
     def fill(self, documents: DocumentSource, essays: EssayWriter | None = None,
-             work_out: WorkOut | None = None) -> FormReport:
+             work_out: WorkOut | None = None, best_guess: WorkOut | None = None) -> FormReport:
         """Fill the form in. Returns what was done and what is still empty.
 
         Each question is answered from the first of these that has an answer:
         the student's saved answers and profile facts; for an open question,
         an answer written from their profile (`essays`); what `work_out` can
-        settle from the profile for the questions still left; and only then
-        the student, at the keyboard.
+        settle from the profile for the questions still left; the student, at
+        the keyboard; and, for what they leave unanswered, `best_guess`.
         """
         report = FormReport()
         self._essays = essays
@@ -916,11 +922,13 @@ class EmployerSite:
                 if not self._try(item, report, overwrite=round_number == 0) and self._needs_answer(item):
                     waiting.append(self._key(item))
             if waiting and work_out is not None:
-                self._work_out(waiting, work_out, report)
+                self._work_out(waiting, work_out, report, report.worked)
             if waiting and self.ask is not None:
                 for item in self.scan():
                     if self._key(item) in waiting and self._needs_answer(item):
                         self._try(item, report, overwrite=False, ask=True)
+            if waiting and best_guess is not None:  # asked and not answered, or nobody there to ask
+                self._work_out(waiting, best_guess, report, report.guessed)
             self._pause(500)
         self._repair()
         report.attached = set(self.attached)
@@ -1007,8 +1015,9 @@ class EmployerSite:
             return None
         return self.ask(label, options, many)
 
-    def _work_out(self, waiting: list[tuple[str, str, str]], work_out: WorkOut, report: FormReport) -> None:
-        """Put the questions nothing saved answers to `work_out`, and fill in what it settles."""
+    def _work_out(self, waiting: list[tuple[str, str, str]], work_out: WorkOut, report: FormReport,
+                  record: list[tuple[str, str, str]]) -> None:
+        """Put the questions still empty to `work_out`, fill in what it settles, and note each in `record`."""
         fields = {self._key(i): i for i in self.scan()}
         questions: list[dict[str, Any]] = []
         asked: dict[int, tuple[str, str, str]] = {}
@@ -1045,7 +1054,7 @@ class EmployerSite:
         for item in self.scan():
             key = self._key(item)
             if key in settled and self._needs_answer(item) and self._try(item, report, overwrite=False):
-                report.worked.append((item["label"], settled[key][0], settled[key][1]))
+                record.append((item["label"], settled[key][0], settled[key][1]))
 
     def _list_options(self, item: dict[str, Any]) -> list[str]:
         """The choices in a list that has to be opened to see them; none for one that searches as you type."""

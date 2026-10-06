@@ -166,6 +166,12 @@ check("a legal question the profile is silent on is never worked out",
       not form_answers.grounded("Have you ever been convicted of a felony?", profile_raw.lower()))
 check("one the student has answered before can be", form_answers.grounded("Will you require sponsorship from Acme?", profile_raw.lower()))
 check("a plain question always can", form_answers.grounded("How did you hear about us?", profile_raw.lower()))
+check("nothing is certified or consented to in the student's name unless they've said so",
+      not form_answers.grounded("By submitting my application, I certify that the information provided is true", profile_raw.lower())
+      and not form_answers.grounded("Do you consent to receive recruiting text messages?", profile_raw.lower()))
+check("a question turned around isn't matched on its phrase",
+      candidates("Is there anything that would prevent you from being able to work onsite?", saved) == []
+      and candidates("Are you able to work in the United States without sponsorship?", saved) == [])
 check("a figure from the profile is fine", form_answers.figures_known("2028", profile_raw, "Graduation year"))
 check("a date written another way is fine", form_answers.figures_known("05/2028", profile_raw, "Graduation date"))
 check("an invented figure is not", not form_answers.figures_known("3.97", profile_raw, "GPA"))
@@ -403,7 +409,7 @@ try:
             return found
 
         left = ["Have you ever been convicted of a felony?", "GPA in your major courses only, if you know it",
-                "Are you related to a current employee?"]
+                "Are you related to a current employee?", "Do you have a disability?"]
         site.open(f"{EMPLOYER}/quiz/apply")
         report = site.fill(documents, None, settle)
         print("  worked out:", report.worked)
@@ -421,13 +427,36 @@ try:
         check("and the student is told why",
               any("figure" in n for n in turned_down) and any("choices" in n for n in turned_down), turned_down)
         asked.clear()
-        site = EmployerSite(page, answers_now(), ask=make_asker({"felony": "No", "major courses": "3.5", "related": "No"}), say=said.append)
+        site = EmployerSite(page, answers_now(), say=said.append,
+                            ask=make_asker({"felony": "No", "major courses": "3.5", "related": "No", "disability": "No"}))
         site.open(f"{EMPLOYER}/quiz/apply")
         report = site.fill(documents, None, settle)
         check("only what couldn't be worked out is asked", sorted(q for q, _ in asked) == sorted(left), asked)
         check("and then nothing is left", report.missing == [], report.missing)
         check("what was worked out is not saved as the student's own words",
               not any("hear" in a["match"][0] for a in site.learned), site.learned)
+        why_empty: list[str] = []
+
+        def judge(questions: list[dict]) -> dict:
+            found, notes = form_answers.work_out(questions, json.loads(PROFILE.read_text(encoding="utf-8")), "Robotics Intern",
+                                                 "Tiny Robotics", "Handshake", best_guess=True, job_text="We build robots.")
+            why_empty.extend(notes)
+            return found
+
+        asked.clear()
+        site = EmployerSite(page, answers_now(), ask=make_asker({}), say=said.append)  # asked, and never answers
+        site.open(f"{EMPLOYER}/quiz/apply")
+        report = site.fill(documents, None, settle, judge)
+        print("  best judgement:", report.guessed)
+        check("the student is asked first", len(asked) == 4, asked)
+        check("a question they leave gets its best judgement",
+              ("Are you related to a current employee?", "No") in [(q, v) for q, v, _ in report.guessed], report.guessed)
+        check("a personal question they've never answered gets the form's own 'prefer not to say'",
+              ("Do you have a disability?", "I prefer not to say") in [(q, v) for q, v, _ in report.guessed], report.guessed)
+        check("a legal question with no such choice is still not guessed, nor is a figure made up",
+              report.missing == left[:2], report.missing)
+        check("and the student is told", any("isn't guessed" in n for n in why_empty), why_empty)
+        check("best judgement is not saved as the student's own words", site.learned == [], site.learned)
         site = EmployerSite(page, answers_now(), ask=None, say=said.append)
 
         site.open(f"{EMPLOYER}/wiping/apply")
