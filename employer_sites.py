@@ -109,8 +109,8 @@ def norm(text: str) -> str:
 
 
 def _loose(text: str) -> str:
-    """For comparing option text: letters and digits only."""
-    return re.sub(r"[^a-z0-9]+", " ", norm(text)).strip()
+    """For comparing option text: letters and digits, plus the "+" and "#" that tell C++ and C# from C."""
+    return re.sub(r"[^a-z0-9+#]+", " ", norm(text)).strip()
 
 
 def _has_words(text: str, phrase: str) -> bool:
@@ -627,6 +627,8 @@ class FormReport:
     written: list[tuple[str, str]] = field(default_factory=list)  # (question, the answer written for it)
     worked: list[tuple[str, str, str]] = field(default_factory=list)  # (question, answer, the profile fact behind it)
     guessed: list[tuple[str, str, str]] = field(default_factory=list)  # (question, best-judgement answer, why)
+    unanswered: list[dict[str, Any]] = field(default_factory=list)  # required questions left empty, with their choices
+    choices: dict[str, list[str]] = field(default_factory=dict)  # choices of the questions that were put to Claude
 
 
 class EmployerSite:
@@ -656,6 +658,7 @@ class EmployerSite:
         self._handled: set[tuple[str, str, str]] = set()
         self._given: set[tuple[str, str, str]] = set()  # questions this code answered, to notice a wiped one
         self._extra_tabs: list[Any] = []
+        self.choices: dict[str, list[str]] = {}  # the choices of lists that had to be opened to read them
         self._essays: EssayWriter | None = None
 
     # ------------------------------------------------------------- opening
@@ -753,6 +756,7 @@ class EmployerSite:
         self.attached = set()
         self._handled = set()
         self._given = set()
+        self.choices = {}
 
     def _frames(self) -> list[Any]:
         main = self.page.main_frame
@@ -889,6 +893,17 @@ class EmployerSite:
                 missing.append(label[:90])
         return missing
 
+    def unanswered(self) -> list[dict[str, Any]]:
+        """The required questions still empty, each with its choices: [{"label", "options"}]. Not files."""
+        found: list[dict[str, Any]] = []
+        for item in self.scan():
+            label = item["label"]
+            if not item["required"] or not item["empty"] or item["kind"] == "file" or not label:
+                continue
+            if all(label != other["label"] for other in found):
+                found.append({"label": label, "options": item["options"] or self.choices.get(label, [])})
+        return found
+
     # -------------------------------------------------------------- filling
 
     def fill(self, documents: DocumentSource, essays: EssayWriter | None = None,
@@ -933,6 +948,8 @@ class EmployerSite:
         self._repair()
         report.attached = set(self.attached)
         report.missing = self.missing_required()
+        report.unanswered = self.unanswered()
+        report.choices = dict(self.choices)
         return report
 
     def _pause(self, ms: int) -> None:
@@ -957,8 +974,8 @@ class EmployerSite:
             self._given.add(self._key(item))
         return answered
 
-    def _repair(self) -> None:
-        """Give again any answer the site wiped.
+    def _repair(self) -> bool:
+        """Give again any answer the site wiped. True when there was one to give.
 
         Some sites redraw the form once they finish reading the resume, which
         empties questions that were already answered.
@@ -969,6 +986,7 @@ class EmployerSite:
             self._try(item, FormReport(), overwrite=False)
         if wiped:
             self._pause(500)
+        return bool(wiped)
 
     def _attach(self, item: dict[str, Any], documents: DocumentSource, report: FormReport) -> None:
         kind = document_kind(item["label"], item.get("hint", ""))
@@ -1025,9 +1043,12 @@ class EmployerSite:
             item = fields.get(key)
             if item is None or not self._needs_answer(item):
                 continue
-            if essay_answers.is_essay(item["label"], item["kind"], True):
+            # Only a box to type in can be an essay. A question with choices is never one,
+            # however essay-like its wording ("...the circumstances described below?").
+            if item["kind"] in ("text", "textarea") and essay_answers.is_essay(item["label"], item["kind"], True):
                 continue  # written by the essay writer, or left for the student
             choices = item["options"] or (self._list_options(item) if item["kind"] == "combobox" else [])
+            self.choices[item["label"]] = choices
             number = len(questions) + 1
             questions.append({
                 "id": number, "question": item["label"], "choices": choices or None,
@@ -1309,6 +1330,7 @@ class EmployerSite:
         something more and nobody gave it) or uncertain (sent, no confirmation
         seen).
         """
+        self._repair()  # a last look: a site can empty an answer between filling and sending
         button = self._submit_button()
         if button is None:
             if self._confirm_text():  # the student pressed it themselves
@@ -1316,14 +1338,17 @@ class EmployerSite:
             return "needs_manual", "couldn't find the form's Submit button"
         url_before, said_before = self.page.url, self._confirm_text()
         code_before = bool(CODE_TEXT.search(self._text(self.frame)))
+        errors_before = set(self._errors())
         try:
             button.scroll_into_view_if_needed()
             button.click()
         except Exception as exc:
             return "needs_manual", f"pressing Submit failed ({type(exc).__name__})"
 
-        deadline = time.monotonic() + 25
-        handed_over = False
+        clicked = time.monotonic()
+        deadline = clicked + 25
+        handed_over = retried = False
+        refused = ""  # what the site said was wrong with the form, if it turned it down
         while True:
             try:
                 self.page.wait_for_timeout(1000)
@@ -1336,12 +1361,30 @@ class EmployerSite:
                 wants = "a security check"
             elif not code_before and CODE_TEXT.search(self._text(self.frame)):
                 wants = "a code it emailed you"
-            elif time.monotonic() >= deadline:
-                problems = self._errors()
-                wants = ("something fixed: " + "; ".join(problems)) if problems else ""
-                if not wants and (handed_over or not self.person_present):
-                    return "uncertain", "Submit was pressed but the site showed no confirmation; check your email"
-                wants = wants or "something more before it confirms"
+            else:
+                problems = [p for p in self._errors() if p not in errors_before] if time.monotonic() - clicked > 3 else []
+                if problems:
+                    refused = "; ".join(problems)[:300]
+                    if not retried:
+                        # The site turned the form down. If it had emptied answers already given,
+                        # they're given again and the form is sent once more.
+                        retried = True
+                        again = self._submit_button() if self._repair() else None
+                        if again is not None:
+                            try:
+                                again.click()
+                                clicked = time.monotonic()
+                                deadline = clicked + 25
+                                refused = ""
+                                continue
+                            except Exception:
+                                pass
+                if time.monotonic() >= deadline:
+                    if refused and (handed_over or not self.person_present):
+                        return "needs_manual", f"the site turned the form down: {refused}"
+                    if not refused and (handed_over or not self.person_present):
+                        return "uncertain", "Submit was pressed but the site showed no confirmation; check your email"
+                    wants = ("something fixed: " + refused) if refused else "something more before it confirms"
             if not wants:
                 continue
             if handed_over:

@@ -339,7 +339,7 @@ document.getElementById('send').addEventListener('click', function () {{
 
 
 def plain_page(action: str, required_essay: bool = False, captcha: bool = False, quiz: bool = False,
-               wiping: bool = False) -> str:
+               wiping: bool = False, rejecting: str = "") -> str:
     """A small company's own form: nothing this tool has seen before."""
     essay = ('<div class="form-group"><label for="why">Why do you want to work here? *</label>'
              '<textarea id="why" name="why" required></textarea></div>') if required_essay else ""
@@ -357,6 +357,7 @@ def plain_page(action: str, required_essay: bool = False, captcha: bool = False,
                  + box("mgpa", "Master's GPA") + box("majorgpa", "GPA in your major courses only, if you know it")
                  + choice("rel", "Are you related to a current employee?", ["Yes", "No"])
                  + choice("dis", "Do you have a disability?", ["Yes", "No", "I prefer not to say"])
+                 + choice("exp", "Would you need an export license under the circumstances described below?", ["Yes", "No"])
                  + box("gy2", "Graduation year (four digits), as it will appear on your transcript"))
     check = ""
     if wiping:
@@ -383,6 +384,26 @@ form.addEventListener('submit', function (event) {
   setTimeout(function () { window.passed = true; frame.remove(); form.submit(); }, 3500);
 });
 </script>"""
+    if rejecting:
+        # Like a site that empties an answer after reading the resume and then turns the form down for
+        # it: once ("once") the missing answer can be given again; "always" it wants something nobody has.
+        check = """
+<script>
+var form = document.querySelector('form[method="post"]');
+var turnedDown = false;
+form.addEventListener('submit', function (event) {
+  if (turnedDown && '%s' === 'once') return;
+  turnedDown = true;
+  event.preventDefault();
+  if ('%s' === 'once') document.getElementById('fn').value = '';
+  var old = document.querySelector('.error-box'); if (old) old.remove();
+  var box = document.createElement('div');
+  box.className = 'error-box error';
+  box.setAttribute('role', 'alert');
+  box.textContent = 'Your form needs corrections. Missing entry for required field: ' + ('%s' === 'once' ? 'First name' : 'Reference code');
+  form.prepend(box);
+});
+</script>""" % (rejecting, rejecting, rejecting)
     return f"""<!doctype html><html><head><title>Careers - Tiny Robotics</title>{STYLE}</head><body>
 <header><form role="search"><input type="search" name="q" placeholder="Search jobs"></form></header>
 <h1>Robotics Intern</h1>
@@ -445,9 +466,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(plain_page("/quiz/apply", quiz=True))
         elif path == "/wiping/apply":
             self._send(plain_page("/wiping/apply", wiping=True))
+        elif path == "/rejecting/apply":
+            self._send(plain_page("/rejecting/apply", rejecting="once"))
+        elif path == "/refusing/apply":
+            self._send(plain_page("/refusing/apply", rejecting="always"))
         elif path == "/guarded/apply":
             self._send(plain_page("/guarded/apply", captcha=True))
-        elif path in ("/plain/done", "/essay/done", "/guarded/done", "/quiz/done", "/wiping/done"):
+        elif path in ("/plain/done", "/essay/done", "/guarded/done", "/quiz/done", "/wiping/done", "/rejecting/done",
+                      "/refusing/done"):
             self._send("<html><body><p>Thanks for applying! We received your application.</p></body></html>")
         elif path == "/embedded":
             self._send("<html><body><h1>Careers at Acme</h1><iframe src='/gh/acme/jobs/1' style='width:900px;height:1400px'></iframe></body></html>")

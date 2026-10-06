@@ -39,18 +39,20 @@ import form_answers
 import posting_cache
 import prompts
 import tailor
+import unanswered
 from employer_sites import (
     FORM_SITES,
     DocumentSource,
     EmployerSite,
     EssayWriter,
     WorkOut,
+    norm,
     pick_option,
     profile_answers,
     remember_answers,
     site_kind,
 )
-from handshake import HandshakeSession
+from handshake import SENSITIVE_QUESTION, HandshakeSession
 from main import DATA_DIR, banner, load_config, load_selectors, manual_list
 
 # Not offered again on later runs (--retry brings back everything but "applied").
@@ -59,8 +61,9 @@ SETTLED = {"applied", "declined", "uncertain", "needs_account", "closed", "no_fo
 # The most forms one run will fill in, however many are asked for.
 MOST_PER_RUN = 500
 
-OUT_OF_CLAUDE_MESSAGE = ("\nClaude has reached its usage limit for now, so answers can't be worked out or written. "
-                         "The run stops here rather than fill forms in badly; run again once the limit resets.")
+OUT_OF_CLAUDE_MESSAGE = ("\nClaude can't be used right now (its usage limit is reached, or Claude Code has been signed "
+                         "out), so answers can't be worked out or written. The run stops here rather than fill forms "
+                         "in badly. Run again once the limit resets, or after signing Claude Code in again.")
 
 CLOSED_MESSAGE = ("\nThe browser window was closed, so the run stops here. "
                   "What was done is saved; run again to carry on.")
@@ -216,12 +219,16 @@ class Papers:
         self.essays = self.can_write and self.allow_ai and not getattr(args, "no_essays", False)
         self.working_out = self.can_write and self.allow_ai and not getattr(args, "ask_me", False)
         self.guessing = self.can_write and self.allow_ai and not getattr(args, "no_guessing", False)
-        self.out_of_claude = False  # Claude said it has hit its usage limit; nothing more can be written this run
+        self.out_of_claude = False  # Claude can't be used (limit reached, or signed out): nothing more can be written
+        self.claude_said = ""
 
     def _heard(self, notes: list[str]) -> None:
-        """Notice Claude saying it has reached its usage limit."""
-        if any("claude code error" in n.lower() and "limit" in n.lower() for n in notes):
-            self.out_of_claude = True
+        """Notice Claude saying it can't be used: its usage limit, or it has been signed out."""
+        for note in notes:
+            low = note.lower()
+            if "claude code error" in low and any(w in low for w in ("limit", "authenticate", "oauth", "signed in", "log in")):
+                self.out_of_claude = True
+                self.claude_said = note
 
     @staticmethod
     def _existing(*paths: Any) -> Path | None:
@@ -452,6 +459,64 @@ def ask_settings(args: argparse.Namespace) -> None:
     print()
 
 
+def show_questions(interactive: bool) -> int:
+    """List the questions the forms couldn't be answered on, and take answers to them."""
+    answers, profile_path = load_answers()
+    rows = unanswered.ranked(answers)
+    page = unanswered.write_page(manual_list().folder, rows)
+    if not rows:
+        print("No unanswered questions on record. They're collected each time a form is filled in, "
+              "practice runs included.")
+        return 0
+    banner(f"{len(rows)} questions it couldn't answer, most common first")
+    for rank, row in enumerate(rows[:25], start=1):
+        print(f"  {rank:2d}. [{row['forms']} form{'s' if row['forms'] != 1 else ''}] {row['question'][:110]}")
+        if row["choices"]:
+            print("        choices: " + " | ".join(c[:30] for c in row["choices"][:8])
+                  + (" ..." if len(row["choices"]) > 8 else ""))
+    print(f"\nThe full list: {page}")
+    if not interactive:
+        return 0
+    reply = (prompts.ask("\nAnswer them now, most common first? [y]es / [n]o: ", None) or "").strip().lower()
+    if not reply.startswith("y"):
+        return 0
+    print("Your answer is saved for every company that asks the same thing. Enter skips a question; q stops.")
+    saved = 0
+    for row in rows:
+        choices = row["choices"]
+        print(f"\n[{row['forms']} form{'s' if row['forms'] != 1 else ''}: {', '.join(row['employers'][:3])}]")
+        print(f"  {row['question']}")
+        for number, choice in enumerate(choices, start=1):
+            print(f"    {number}. {choice}")
+        reply = (prompts.ask("  Your answer" + (" (a number, or numbers with commas)" if choices else "") + ": ", None)
+                 or "").strip()
+        if reply.lower() in ("q", "quit"):
+            break
+        if not reply:
+            continue
+        value = reply
+        if choices:
+            picked = []
+            for part in [p.strip() for p in reply.split(",") if p.strip()]:
+                if part.isdigit() and 1 <= int(part) <= len(choices):
+                    picked.append(choices[int(part) - 1])
+                elif pick_option(choices, part) is not None:
+                    picked.append(choices[pick_option(choices, part)])  # type: ignore[index]
+            if not picked:
+                print("  That isn't one of the choices, so it's skipped.")
+                continue
+            value = "; ".join(picked)
+        saved += remember_answers(profile_path, [
+            {"match": [norm(label)[:160]], "value": value, "sensitive": bool(SENSITIVE_QUESTION.search(label))}
+            for label in row["labels"] or [row["question"]]
+        ])
+    left = unanswered.ranked(load_answers()[0])
+    unanswered.write_page(manual_list().folder, left)
+    print(f"\nSaved {saved} answer{'s' if saved != 1 else ''} to your profile. {len(left)} question{'s' if len(left) != 1 else ''} "
+          "still without one.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Apply on employers' own sites, working down the ranked lists.")
     parser.add_argument("--list", choices=["ranked", "elsewhere", "both"], default="ranked",
@@ -464,6 +529,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="fill forms in but never send one")
     parser.add_argument("--auto-submit", action="store_true", help="send complete forms without asking each time")
     parser.add_argument("--links-only", action="store_true", help="only look up where each posting applies")
+    parser.add_argument("--questions", action="store_true",
+                        help="show the questions it couldn't answer so far, most common first, and answer them")
     parser.add_argument("--retry", action="store_true", help="include postings settled on earlier runs")
     parser.add_argument("--resume", help="your resume (default: the one the launcher remembers)")
     parser.add_argument("--tailor-resume", action="store_true", help="make a resume for each job from your profile")
@@ -489,6 +556,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     interactive = sys.stdin is not None and sys.stdin.isatty()
+    if args.questions:
+        return show_questions(interactive)
     if args.ask and interactive:
         ask_settings(args)
     config = load_config(args)
@@ -548,6 +617,15 @@ def main(argv: list[str] | None = None) -> int:
                                 + ("" if not auto or args.send_essays else "; those forms wait for you to read")
                                 if papers.essays else "not written; asked, or left for you"))
         print("  never    : passwords, Social Security numbers, bank details, or a security check")
+    if not args.links_only and (papers.essays or papers.working_out or papers.guessing):
+        ready, why = tailor.claude_ready()
+        if not ready:
+            print(f"\n[!] {why}")
+            print("    Until that's done, nothing can be worked out from your profile or written for you: "
+                  "leftover questions are asked, or left empty.")
+            if interactive and not (prompts.ask("    Carry on anyway? [y]es / [n]o: ", None) or "").strip().lower().startswith("y"):
+                return 1
+            papers.essays = papers.working_out = papers.guessing = False
     if auto:
         print("\nAutomatic mode sends applications in your name without further prompts.")
         if input("Type 'yes' to continue: ").strip().lower() != "yes":
@@ -632,7 +710,12 @@ def main(argv: list[str] | None = None) -> int:
                     break
                 if papers.out_of_claude:
                     print(OUT_OF_CLAUDE_MESSAGE)
+                    print(f"What Claude said: {papers.claude_said[:200]}")
                     break
+                # Kept across runs, so the questions asked most can be answered once for every company.
+                unanswered.note(posting, report.unanswered, "empty")
+                unanswered.note(posting, [{"label": q, "options": report.choices.get(q, [])} for q, _, _ in report.guessed],
+                                "guessed")
                 print(f"  filled in {len(report.filled)}: " + "; ".join(f[:70] for f in report.filled[:8])
                       + (" ..." if len(report.filled) > 8 else ""))
                 for question, text in report.written:
@@ -726,6 +809,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {count:3d}  {SAYS.get(status, status)}")
     if results is not None:
         print(f"\nEvery posting tried so far, with its employer link: {results}")
+    if not args.links_only:
+        open_questions = unanswered.ranked(load_answers()[0])
+        if open_questions:
+            page = unanswered.write_page(listing.folder, open_questions)
+            banner("Questions it couldn't answer, most common first")
+            for row in open_questions[:8]:
+                print(f"  {row['forms']:3d} form{'s' if row['forms'] != 1 else ' '}  {row['question'][:100]}")
+            print(f"\nAll {len(open_questions)}: {page}")
+            print('Answer them once for every company with "Answer skipped questions" in Programs '
+                  "(or: python employer_apply.py --questions).")
     return 0
 
 

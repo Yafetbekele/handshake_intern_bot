@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import csv
+import io
 import json
 import os
 import shutil
@@ -185,6 +186,8 @@ check("punctuation doesn't matter", pick_option(["University of Springfield - Sh
 check("a longer option that holds the answer", pick_option(["Bachelor's Degree", "Master's Degree"], "Bachelor's") == 0)
 check("no match is no match", pick_option(["Male", "Female"], "Decline") is None)
 check("female isn't male", pick_option(["Male", "Female"], "male") == 0)
+check("C++ and C# aren't C", (pick_option(["C", "C++", "C#"], "C++"), pick_option(["C", "C++", "C#"], "C#"),
+                              pick_option(["C", "C++", "C#"], "C")) == (1, 2, 0))
 
 check("resume slot", document_kind("Resume/CV", "resume") == "resume")
 check("cover letter slot", document_kind("Attach", "cover_letter") == "cover_letter")
@@ -227,6 +230,31 @@ first = essay_answers.answer("job-9", "Why do you want to work here?", "Embedded
 again = essay_answers.answer("job-9", "Why do you want to work here?", "Embedded Intern", "Acme", "We build embedded systems.")
 check("an answer is kept for its job and reused", first.method == "ai" and again.method == "saved" and again.text == first.text)
 check("and saved where the student can read it", (WORK / "tailored" / "job-9-acme" / "written_answers.txt").read_text(encoding="utf-8").startswith("Why do you want"))
+
+section("1c. THE LIST OF QUESTIONS IT COULDN'T ANSWER")
+import unanswered  # noqa: E402
+
+acme, beta = {"id": "a-1", "employer": "Acme Robotics"}, {"id": "b-1", "employer": "Beta"}
+unanswered.note(acme, [{"label": "Are you related to any current Acme employees?*", "options": ["Yes", "No"]},
+                       {"label": "Social Security Number", "options": []}], "empty")
+unanswered.note(beta, [{"label": "Are you related to any current Beta employees?", "options": ["Yes", "No"]},
+                       {"label": "Favorite tool?", "options": []}], "empty")
+unanswered.note(beta, [{"label": "Are you related to any current Beta employees?", "options": []}], "empty")  # a second run
+unanswered.note({"id": "c-1", "employer": "Gamma"}, [{"label": "Favorite tool?", "options": []}], "guessed")
+rows = unanswered.ranked(answers_now())
+check("the same question from two companies is one entry, counted once per posting",
+      rows[0]["question"] == "Are you related to any current [company] employees?" and rows[0]["forms"] == 2, rows[:1])
+check("with its choices", rows[0]["choices"] == ["Yes", "No"])
+check("most common first, left-empty ahead of best judgement", [r["question"] for r in rows[:2]]
+      == ["Are you related to any current [company] employees?", "Favorite tool?"], [r["question"] for r in rows])
+check("and says what happened", unanswered.what_happened(rows[1]) == "left empty on 1, best judgement used on 1", unanswered.what_happened(rows[1]))
+check("something never filled in isn't listed as waiting for an answer", not any("Social Security" in r["question"] for r in rows))
+answered = answers_now() + [{"match": ["are you related to any current acme employees?"], "value": "No"},
+                            {"match": ["are you related to any current beta employees?"], "value": "No"}]
+check("a question leaves the list once the profile answers it", not any("related" in r["question"] for r in unanswered.ranked(answered)))
+listed = unanswered.write_page(WORK / "list", rows)
+check("the list is written as a page", listed.exists() and "[company]" in listed.read_text(encoding="utf-8"))
+unanswered.path().unlink()
 
 server, _ = fake_employer_sites.serve(EMPLOYER_PORT)
 from playwright.sync_api import sync_playwright  # noqa: E402
@@ -417,8 +445,11 @@ try:
               "Expected graduation year" not in sent_to_claude and page.locator("#gy").input_value() == "2028", sent_to_claude)
         check("leftover questions the profile settles are filled in",
               {q for q, _, _ in report.worked} == {"How did you hear about us?", "Master's GPA",
-                                                   "Graduation year (four digits), as it will appear on your transcript"},
+                                                   "Graduation year (four digits), as it will appear on your transcript",
+                                                   "Would you need an export license under the circumstances described below?"},
               report.worked)
+        check("a question with choices is never taken for an essay, however it is worded",
+              page.locator("#exp").input_value() == "No", page.locator("#exp").input_value())
         check("with the right values",
               (page.locator("#hear").input_value(), page.locator("#mgpa").input_value(), page.locator("#gy2").input_value())
               == ("Handshake", "N/A", "2028"))
@@ -463,6 +494,18 @@ try:
         report = site.fill(documents)
         check("an answer the site wiped is given again",
               report.missing == [] and page.locator("#fn").input_value() == "Jane", (report.missing, page.locator("#fn").input_value()))
+
+        site.open(f"{EMPLOYER}/rejecting/apply")
+        site.fill(documents)
+        status, note = site.submit()
+        check("a form turned down over an answer the site emptied is repaired and sent again",
+              status == "applied" and last("/rejecting")["fields"]["first"] == ["Jane"], (status, note))
+        site.open(f"{EMPLOYER}/refusing/apply")
+        site.fill(documents)
+        sent_before = len(fake_employer_sites.SUBMISSIONS)
+        status, note = site.submit()
+        check("a form the site keeps turning down is reported as not sent, with what the site said",
+              status == "needs_manual" and "Reference code" in note and len(fake_employer_sites.SUBMISSIONS) == sent_before, (status, note))
 
         other = browser.new_page()
         gone = EmployerSite(other, answers_now(), ask=None, say=said.append)
@@ -525,7 +568,7 @@ try:
         writer.writerow(["rank", "score", "title", "employer", "location", "pay", "deadline", "kind of job", "matches", "notes", "more at this company", "url"])
         writer.writerow([1, 88.0, "Machine Learning Intern", "Initech", "Remote", "", "", "", "", "", 0, f"{HANDSHAKE}/job-search/1002"])
     common = ["--resume", str(RESUME), "--headless", "--base-url", HANDSHAKE]
-    sys.stdin = open(os.devnull)  # nobody at the keyboard
+    sys.stdin = io.StringIO()  # nobody at the keyboard (the null device counts as a keyboard on Windows)
     typed = iter(["yes"])
     real_input = builtins.input
     builtins.input = lambda prompt="": next(typed)
@@ -572,6 +615,13 @@ try:
         check("the record keeps questions, not answers", "jane.doe@example.edu" not in json.dumps(log) and "Email" in log["gh-acme-1"]["answered"])
         rows = list(csv.DictReader((listing / "employer_site_results.csv").open(encoding="utf-8")))
         check("results spreadsheet lists every posting with a link", len(rows) == 8 and all(r["where to apply"].startswith("http") for r in rows), len(rows))
+
+        open_questions = unanswered.ranked(answers_now())
+        check("the question a form was left over is on the list of unanswered ones",
+              any(r["question"] == "Why do you want to work here?" and r["employers"] == ["Wordy"] for r in open_questions), open_questions)
+        check("answered questions from the forms that were sent are not", not any("authorized" in r["question"].lower() for r in open_questions))
+        check("the list can be shown on its own", employer_apply.main(["--questions"]) == 0
+              and (listing / "Questions it couldn't answer.html").exists())
 
         sent_before = len(fake_employer_sites.SUBMISSIONS)
         typed = iter(["yes"])

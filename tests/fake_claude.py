@@ -32,6 +32,8 @@ if "-p" in args and "fill in a student's internship application" in " ".join(arg
         text = question["question"].lower()
         if guessing and "related to" in text:
             answer, because = "No", "no relatives are mentioned anywhere in the profile"
+        elif "export license" in text:
+            answer, because = "No", "nothing in the profile calls for one"
         elif "how did you hear" in text:
             answer, because = "Handshake", "found on Handshake"
         elif "felony" in text:

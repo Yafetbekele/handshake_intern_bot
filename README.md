@@ -333,6 +333,18 @@ Some sites redraw their form after reading your resume and empty questions
 already answered; the tool checks at the end and answers those again. If you
 close the browser window, the run stops there instead of carrying on.
 
+**The questions it couldn't answer.** Every time a form is filled in (practice
+runs too), the required questions it had to leave empty, and the ones it could
+only answer with its best judgement, are counted. The same question from
+different companies counts as one. The end of each run prints the most common,
+and "Questions it couldn't answer.html" in the apply-yourself folder has them
+all, with their choices and which companies asked. Double-click **Answer
+skipped questions.bat** (or `python employer_apply.py --questions`) to go
+through them, most common first: type an answer or a choice's number, Enter to
+skip one, q to stop. Each answer is saved for every company that asked that
+question, and a question leaves the list once your profile answers it. Kept in
+`data/unanswered_questions.json`, which holds questions, never answers.
+
 **Written answers.** An open question such as "Why do you want to work here?"
 or "Tell us about a project you're proud of" is answered for you, for that one
 job, from `profile/career_profile.json` and your baseline cover letter.
@@ -816,6 +828,7 @@ fake Claude program, so they never read your profile or use your Claude plan.
 | `employer_sites.py` | Reads, fills in and sends an employer's application form (Greenhouse, Lever, Ashby). |
 | `essay_answers.py` | Answers to an application's open questions, written from your profile and fact checked. |
 | `form_answers.py` | Works out a form's leftover questions from your profile, and checks what comes back. |
+| `unanswered.py`, `Programs/Answer skipped questions.bat` | The list of questions it couldn't answer, most common first, and answering them once for every company. |
 | `letters_for_list.py` | Cover letters (and resumes) for the top of a ranked list. |
 | `make_documents.py` | A resume or cover letter for one posting, without searching or applying. |
 | `Programs/Make a cover letter.bat`, `Programs/Make a resume.bat` | Double-click versions of `make_documents.py`. |
