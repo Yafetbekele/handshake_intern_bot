@@ -232,6 +232,9 @@ def lever_page(action: str) -> str:
 <div class="application-question"><label><div class="application-label">Gender</div><div class="application-field">
 <select name="eeo[gender]"><option value="">Select ...</option><option>Male</option><option>Female</option><option>Decline to self-identify</option></select></div></label></div>
 </ul>
+<div class="section page-centered application-form"><h4>Additional information</h4>
+<div class="application-additional"><textarea name="comments" id="additional-information" class="card-field-input"
+ placeholder="Add a cover letter or anything else you want to share."></textarea></div></div>
 <input type="hidden" name="h-captcha-response" id="hcaptchaResponseInput">
 <div id="errors"></div>
 <button type="button" id="btn-submit" class="postings-btn template-btn-submit">SUBMIT APPLICATION</button>

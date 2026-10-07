@@ -57,8 +57,9 @@ profile["application_answers"] = [
     {"match": ["social security"], "value": "000-00-0000"},
 ]
 PROFILE.write_text(json.dumps(profile, indent=2), encoding="utf-8")
-RESUME = WORK / "Jane_Doe_Resume.pdf"
+RESUME = WORK / "My_Usual_Resume.pdf"  # a resume tailored to a job is named Jane_Doe_Resume.pdf
 RESUME.write_bytes(b"%PDF-1.4 test resume")
+TYPED_LETTER = "Dear Hiring Team,\n\nI built a Raspberry Pi weather station.\n\nSincerely,\nJane Doe"
 
 import applied_myself  # noqa: E402
 import employer_apply  # noqa: E402
@@ -355,7 +356,30 @@ try:
               sent["fields"]["cards[a][field2]"] == [""] and "cards[c][field1]" not in sent["fields"] and sent["fields"]["org"] == [""])
         check("optional gender from the saved answer", sent["fields"]["eeo[gender]"] == ["Decline to self-identify"])
         check("resume attached", sent["files"].get("resume") == RESUME.name)
+        check("with no cover letter to give, the box that takes one is left empty", sent["fields"]["comments"] == [""], sent["fields"]["comments"])
         remember_answers(PROFILE, site.learned)
+
+        # Lever has nowhere to attach a cover letter, only a box that says to add one.
+        wanted: list[bool] = []
+        site = EmployerSite(page, answers_now(), ask=None, say=said.append)
+        site.open(f"{EMPLOYER}/lever/acme/{JOB}")
+        report = site.fill(documents, letter=lambda required: wanted.append(required) or TYPED_LETTER)
+        box = page.evaluate("() => document.querySelector('textarea[name=comments]').value")
+        check("a cover letter is typed into the box that asks for one", box == TYPED_LETTER, box)
+        check("which the form didn't require", wanted and not any(wanted), wanted)
+        check("and the report says so", any("your cover letter" in line for line in report.filled), report.filled)
+        check("the follow-up box beside it isn't given the letter",
+              page.evaluate("() => document.querySelector('textarea[name=\"cards[a][field2]\"]').value") == "")
+        wanted.clear()
+        site = EmployerSite(page, answers_now(), ask=None, say=said.append)
+        site.open(f"{EMPLOYER}/gh/acme/jobs/1")
+        letter_file = WORK / "Some_Cover_Letter.pdf"
+        letter_file.write_bytes(b"%PDF-1.4 test letter")
+        report = site.fill(lambda kind, required: {"resume": RESUME, "cover_letter": letter_file}.get(kind),
+                           letter=lambda required: wanted.append(required) or TYPED_LETTER)
+        check("where a form has a slot for it, the letter is attached as a file",
+              "cover_letter" in report.attached and any(line == f"cover letter: {letter_file.name}" for line in report.filled), report.filled)
+        check("and not typed anywhere as well", wanted == [] and not any("typed in" in line for line in report.filled), wanted)
 
         section("5. AN ASHBY FORM")
         asked.clear()
@@ -561,7 +585,7 @@ try:
         {"id": "gone-1", "title": "Old Intern", "employer": "Gone", "location": "", "url": f"{EMPLOYER}/closed", "description": "", "score": 70},
         {"id": "essay-1", "title": "Essay Intern", "employer": "Wordy", "location": "", "url": f"{EMPLOYER}/essay/apply", "description": "", "score": 60},
         {"id": "plain-1", "title": "Robotics Intern", "employer": "Tiny Robotics", "location": "", "url": f"{EMPLOYER}/plain/apply", "description": "", "score": 50},
-        {"id": f"lv-acme-{JOB}", "title": "Firmware Intern", "employer": "Acme", "location": "", "url": f"{EMPLOYER}/lever/acme/{JOB}", "description": "", "score": 40},
+        {"id": f"lv-acme-{JOB}", "title": "Firmware Intern", "employer": "Acme", "location": "", "url": f"{EMPLOYER}/lever/acme/{JOB}", "description": "Firmware for embedded devices.", "score": 40},
     ]), encoding="utf-8")
     with (listing / "all_ranked.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -576,10 +600,22 @@ try:
     employer_apply.load_config = lambda args: dict(config(args), delay_between_employer_applications_seconds=[0, 0])
     try:
         sent_before = len(fake_employer_sites.SUBMISSIONS)
+        tailored = WORK / "tailored"
+        code = employer_apply.main(["--list", "elsewhere", "--dry-run", "--usual-resume", "--no-cover-letters"] + common)
+        check("with --usual-resume and --no-cover-letters, no resume or letter is made",
+              code == 0 and not list(tailored.glob("*/*_Resume.pdf")) and not list(tailored.glob("*/*_Cover_Letter.pdf")),
+              [str(p) for p in tailored.glob("*/*.pdf")])
         code = employer_apply.main(["--list", "elsewhere", "--dry-run"] + common)
         check("practice run finishes", code == 0)
         check("a practice run sends nothing", len(fake_employer_sites.SUBMISSIONS) == sent_before)
         check("and marks nothing applied", applied_myself.ids() == set())
+        check("left to itself, it tailors a resume to each posting",
+              all((tailored / folder / "Jane_Doe_Resume.pdf").exists() for folder in ("ab-acme-1-acme", "gh-acme-1-acme", f"lv-acme-{JOB}-acme")),
+              [str(p) for p in tailored.glob("*/*.pdf")])
+        check("and writes a cover letter wherever the form takes one, required or not",
+              all((tailored / folder / "Jane_Doe_Cover_Letter.pdf").exists() for folder in ("gh-acme-1-acme", f"lv-acme-{JOB}-acme")))
+        check("but none for a form with nowhere to put it", not (tailored / "ab-acme-1-acme" / "Jane_Doe_Cover_Letter.pdf").exists())
+        check("a posting with no description saved gets neither", not list(tailored.glob("plain-1-*/*.pdf")))
 
         # The Ashby form is first on the list and has an optional "Why do you want to work at Acme?".
         code = employer_apply.main(["--list", "elsewhere", "--auto-submit", "--hold-essays", "--top", "1"] + common)
@@ -612,6 +648,15 @@ try:
         check("the Lever form was sent", statuses.get(f"lv-acme-{JOB}") == "applied")
         check("the Handshake posting was followed to its employer and sent", statuses.get("1002") == "applied")
         check("its employer link was kept", json.loads((data / "employer_links.json").read_text(encoding="utf-8")) == {"1002": f"{EMPLOYER}/gh/acme/jobs/1"})
+        by_list, from_handshake = [s for s in fake_employer_sites.SUBMISSIONS if s["path"].startswith("/gh/acme")][-2:]
+        check("the employer received the resume tailored to that job, with its cover letter",
+              by_list["files"] == {"resume": "Jane_Doe_Resume.pdf", "cover_letter": "Jane_Doe_Cover_Letter.pdf"}, by_list["files"])
+        check("a posting with no description saved went out with the usual resume and no letter",
+              from_handshake["files"] == {"resume": RESUME.name}, from_handshake["files"])
+        typed_in = last("/lever/acme")["fields"]["comments"][0]
+        check("on a form with only a box for it, the letter written for that job was typed in",
+              typed_in.startswith("Dear Hiring Team,") and typed_in.rstrip().endswith("Jane Doe") and "weather station" in typed_in, typed_in[:200])
+        check("without the parts Claude invented", "hackathon" not in typed_in and "Kubernetes" not in typed_in, typed_in)
         check("Workday left for the student", statuses.get("wd-big-1") == "needs_account")
         check("the closed posting noted", statuses.get("gone-1") == "closed")
         check("with --no-essays the essay form is left for the student", statuses.get("essay-1") == "needs_manual" and "Why do you want" in log["essay-1"]["note"], log.get("essay-1"))

@@ -10,9 +10,9 @@
 rank_all.py and find_elsewhere.py make the lists. For each posting, best fit
 first, this finds the employer's application form (for a Handshake posting, by
 reading the employer's address from the posting's own page), fills it in from
-your saved answers, attaches your resume, and shows you the filled form in the
-browser before anything is sent. See employer_sites.py for what it will and
-won't fill in.
+your saved answers, attaches a resume tailored to that job and a cover letter
+written for it, and shows you the filled form in the browser before anything
+is sent. See employer_sites.py for what it will and won't fill in.
 
 What happened to each posting is kept in data/employer_applications.json and
 "employer_site_results.csv" in the results folder. A posting it applied to is
@@ -40,11 +40,13 @@ import posting_cache
 import prompts
 import tailor
 import unanswered
+from urllib.parse import urlparse
 from employer_sites import (
     FORM_SITES,
     DocumentSource,
     EmployerSite,
     EssayWriter,
+    LetterText,
     WorkOut,
     norm,
     pick_option,
@@ -210,9 +212,10 @@ class Papers:
         self.resume = self._existing(getattr(args, "resume", None), config.get("resume_path"), settings.get("resume"))
         self.transcript = self._existing(config.get("transcript_path"), settings.get("transcript"))
         self.own_letter = self._existing(config.get("cover_letter_path"), settings.get("cover_letter"))
-        self.tailor = bool(config.get("tailor_resume"))
+        # Each posting gets a resume and a cover letter of its own, unless that's switched off.
+        self.tailor = not getattr(args, "usual_resume", False)
         self.letters = "never" if not config.get("write_cover_letters", True) else (
-            "always" if getattr(args, "cover_letters", False) else "required")
+            "required" if getattr(args, "cover_letters_if_required", False) else "always")
         self.allow_ai = bool(config.get("use_ai_for_tailoring", True))
         self._ai: bool | None = None
         self.can_write = tailor.PROFILE_PATH.exists()
@@ -254,18 +257,47 @@ class Papers:
                 return path
         return None
 
+    def _ran_out(self, notes: list[str], *made: Path) -> bool:
+        """Whether Claude gave out while a document was being made.
+
+        What was made without it is removed, so a later run makes it properly
+        instead of reusing the plainer one.
+        """
+        self._heard(notes)
+        if not self.out_of_claude:
+            return False
+        for path in made:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return True
+
     def _resume_for(self, posting: dict[str, Any]) -> Path | None:
+        if not self.tailor:
+            return self.resume
         made = self._made_earlier(posting, "_Resume.pdf")
         if made is not None:
+            print(f"  resume: the one tailored to this job earlier ({made.name})")
             return made
-        if self.tailor and self.can_write and posting["description"]:
-            print("  tailoring your resume for this job...")
-            try:
-                return tailor.tailor_resume(self._folder_id(posting), posting["title"], posting["employer"],
-                                            posting["description"], use_ai=self._use_ai()).path
-            except Exception as exc:  # never let tailoring stop an application
-                print(f"  [warn] tailoring failed ({type(exc).__name__}); using your usual resume")
-        return self.resume
+        if not self.can_write or not posting["description"] or self.out_of_claude:
+            if self.can_write and not posting["description"]:
+                print("  [note] no description is saved for this posting, so your usual resume is used")
+            return self.resume
+        print("  tailoring your resume for this job...")
+        try:
+            result = tailor.tailor_resume(self._folder_id(posting), posting["title"], posting["employer"],
+                                          posting["description"], use_ai=self._use_ai())
+        except Exception as exc:  # never let tailoring stop an application
+            print(f"  [warn] tailoring failed ({type(exc).__name__}); using your usual resume")
+            return self.resume
+        if self._ran_out(result.notes, result.path, result.path.parent / "plan.json"):
+            return self.resume
+        how = {"ai": "Claude, checked against your profile", "rules": "rules from your profile"}.get(result.method, result.method)
+        print(f"  tailored resume ({how}): {result.path.name}")
+        for note in result.notes[:2]:
+            print(f"    {note}")
+        return result.path
 
     def _letter_for(self, posting: dict[str, Any], required: bool) -> Path | None:
         if self.own_letter is not None:
@@ -273,17 +305,41 @@ class Papers:
         made = self._made_earlier(posting, "_Cover_Letter.pdf")
         if made is not None:
             return made
-        if self.letters == "never" or not self.can_write or not posting["description"]:
+        if self.letters == "never" or not self.can_write or not posting["description"] or self.out_of_claude:
             return None
         if not required and self.letters != "always":
-            return None  # an optional slot is left empty unless letters were asked for
+            return None  # with --cover-letters-if-required, an optional slot is left empty
         print("  writing a cover letter for this job...")
         try:
-            return cover_letter.cover_letter(self._folder_id(posting), posting["title"], posting["employer"],
-                                             posting["description"], use_ai=self._use_ai()).path
+            result = cover_letter.cover_letter(self._folder_id(posting), posting["title"], posting["employer"],
+                                               posting["description"], use_ai=self._use_ai())
         except Exception as exc:
             print(f"  [warn] couldn't write the cover letter ({type(exc).__name__})")
             return None
+        folder = result.path.parent
+        if self._ran_out(result.notes, result.path, folder / "cover_letter.json", folder / "cover_letter.txt"):
+            return None
+        how = {"ai": "Claude, fact checked", "baseline": "your baseline letter",
+               "profile": "your profile"}.get(result.method, result.method)
+        print(f"  cover letter ({how}): {result.path.name}")
+        for note in result.notes[:2]:
+            print(f"    {note}")
+        return result.path
+
+    def letter_text_for(self, posting: dict[str, Any]) -> LetterText:
+        """This posting's cover letter as text, for a form with a box to type it into and nowhere to attach it."""
+        def text(required: bool) -> str | None:
+            path = self._letter_for(posting, required)
+            if path is None or path == self.own_letter:
+                return None  # only a letter written here has its words on file
+            try:
+                body = (path.parent / "cover_letter.txt").read_text(encoding="utf-8").strip()
+                name = tailor.load_profile(tailor.PROFILE_PATH)["contact"]["name"]
+            except Exception:
+                return None
+            return f"Dear Hiring Team,\n\n{body}\n\nSincerely,\n{name}" if body else None
+
+        return text
 
     def essays_for(self, posting: dict[str, Any]) -> EssayWriter | None:
         """Writes answers to this posting's open questions from the profile, or None when that's off."""
@@ -440,6 +496,62 @@ def note_link_problem(posting: dict[str, Any], why: str, seen: str) -> None:
     print(f"     what the page showed is saved in {path}")
 
 
+def verify_via_email(session: Any, posting: dict[str, Any], link: str, person_present: bool) -> bool:
+    """After a form submit with no confirmation page, check Gmail for a verification email.
+
+    Returns True if verification was found and clicked, False otherwise.
+    """
+    if not person_present:
+        return False  # only verify when someone is at the keyboard
+    try:
+        employer = posting["employer"]
+        # Extract domain from the employer's link to search Gmail
+        domain = urlparse(link).netloc.split(".")[-2]  # e.g., "greenhouse" from "job-boards.greenhouse.io"
+        if not domain or len(domain) < 2:
+            domain = posting["employer"].split()[0].lower()
+
+        # Open Gmail
+        gmail_tab = session.new_tab()
+        gmail_tab.goto("https://gmail.com")
+        print(f"    checking your email for a confirmation from {employer}...")
+
+        # Search for emails from this employer in the last hour
+        try:
+            search_box = gmail_tab.wait_for_selector('input[aria-label="Search"]', timeout=5000)
+            search_box.fill(f"from:{domain} newer_than:1h")
+            search_box.press("Enter")
+            gmail_tab.wait_for_load_state("networkidle", timeout=10000)
+
+            # Look for verification links or buttons
+            emails = gmail_tab.query_selector_all('div[role="main"] a')
+            verification_found = False
+            for email in emails[:5]:  # check first 5 emails
+                text = email.text_content() or ""
+                if any(word in text.lower() for word in ["verify", "confirm", "complete", "activate"]):
+                    print(f"    found: {text[:60]}")
+                    if person_present:
+                        reply = (prompts.ask("    Click this link to verify? [y]es / [n]o: ", None) or "").strip().lower()
+                        if reply.startswith("y"):
+                            email.click()
+                            gmail_tab.wait_for_load_state("networkidle", timeout=10000)
+                            verification_found = True
+                            print("    clicked!")
+                            break
+
+            gmail_tab.close()
+            return verification_found
+        except Exception as exc:
+            print(f"    [note] couldn't search Gmail ({type(exc).__name__})")
+            try:
+                gmail_tab.close()
+            except Exception:
+                pass
+            return False
+    except Exception as exc:
+        print(f"    [note] email verification failed ({type(exc).__name__})")
+        return False
+
+
 def ask_settings(args: argparse.Namespace) -> None:
     """The double-click version: three questions instead of command line flags."""
     def choice(prompt: str, allowed: str, default: str) -> str:
@@ -548,10 +660,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="show the questions it couldn't answer so far, most common first, and answer them")
     parser.add_argument("--retry", action="store_true", help="include postings settled on earlier runs")
     parser.add_argument("--resume", help="your resume (default: the one the launcher remembers)")
-    parser.add_argument("--tailor-resume", action="store_true", help="make a resume for each job from your profile")
-    parser.add_argument("--cover-letters", action="store_true",
-                        help="write a cover letter wherever a form takes one, not only where it's required")
+    parser.add_argument("--usual-resume", action="store_true",
+                        help="attach your usual resume as it is, instead of one tailored to each job")
+    parser.add_argument("--cover-letters-if-required", action="store_true",
+                        help="write a cover letter only where a form requires one, not wherever it takes one")
     parser.add_argument("--no-cover-letters", action="store_true", help="never write a cover letter")
+    parser.add_argument("--tailor-resume", action="store_true", help=argparse.SUPPRESS)  # now what happens anyway
+    parser.add_argument("--cover-letters", action="store_true", help=argparse.SUPPRESS)  # now what happens anyway
     parser.add_argument("--ask-me", action="store_true",
                         help="ask me every question my saved answers don't cover, instead of working "
                              "the answer out from my profile with Claude")
@@ -623,7 +738,14 @@ def main(argv: list[str] | None = None) -> int:
         print("  mode     : " + ("practice run, nothing is sent" if dry_run
                                 else "automatic, complete forms are sent without asking" if auto
                                 else "you check each filled form before it's sent"))
-        print(f"  resume   : {papers.resume}")
+        print("  resume   : " + (f"tailored to each job from your profile; your usual one ({papers.resume.name}) "
+                                 "where that can't be done" if papers.tailor and papers.can_write else str(papers.resume)))
+        print("  letters  : " + (
+            f"your own ({papers.own_letter.name}), wherever a form takes one" if papers.own_letter is not None
+            else "none written; one already made for a job is still attached" if papers.letters == "never"
+            else "none, with no career profile to write them from" if not papers.can_write
+            else "written for a job only where its form requires one" if papers.letters == "required"
+            else "written for each job and given wherever its form takes one"))
         print(f"  this run : up to {args.max} " + ("applications sent" if auto else "forms")
               + f", from {len(postings)} postings on the list")
         print(f"  answers  : {len(answers)} from your profile and saved answers; "
@@ -633,15 +755,21 @@ def main(argv: list[str] | None = None) -> int:
                                 + ("; those forms wait for you to read" if auto and args.hold_essays else "")
                                 if papers.essays else "not written; asked, or left for you"))
         print("  never    : passwords, Social Security numbers, bank details, or a security check")
-    if not args.links_only and (papers.essays or papers.working_out or papers.guessing):
+    makes_documents = papers.can_write and papers.allow_ai and (
+        papers.tailor or (papers.letters != "never" and papers.own_letter is None))
+    if not args.links_only and (papers.essays or papers.working_out or papers.guessing or makes_documents):
         ready, why = tailor.claude_ready()
         if not ready:
             print(f"\n[!] {why}")
             print("    Until that's done, nothing can be worked out from your profile or written for you: "
                   "leftover questions are asked, or left empty.")
+            if makes_documents:
+                print("    Resumes are still tailored, by simple rules instead of Claude, and cover letters are "
+                      "your baseline letter with the company and role filled in.")
             if interactive and not (prompts.ask("    Carry on anyway? [y]es / [n]o: ", None) or "").strip().lower().startswith("y"):
                 return 1
             papers.essays = papers.working_out = papers.guessing = False
+            papers._ai = False
     if auto:
         print("\nAutomatic mode sends applications in your name without further prompts.")
         if input("Type 'yes' to continue: ").strip().lower() != "yes":
@@ -718,7 +846,7 @@ def main(argv: list[str] | None = None) -> int:
                 if ask is not None:
                     ask.reset()
                 report = site.fill(papers.for_posting(posting), papers.essays_for(posting), papers.answers_for(posting),
-                                   papers.guesses_for(posting))
+                                   papers.guesses_for(posting), papers.letter_text_for(posting))
                 saved = remember_answers(profile_path, site.learned)
                 site.learned = []
                 if not site.alive():
@@ -775,6 +903,11 @@ def main(argv: list[str] | None = None) -> int:
                                                         "--auto-submit to see it, or without --hold-essays to send it")
                     else:
                         status, note = site.submit()
+                        # If the site showed no confirmation, check email for verification
+                        if status == "uncertain" and person_present:
+                            verified = verify_via_email(session, posting, link, person_present)
+                            if verified:
+                                status, note = "applied", "confirmed via email"
                         handled += 1
                 else:
                     stop = False
@@ -792,6 +925,11 @@ def main(argv: list[str] | None = None) -> int:
                                 if not again.startswith("y"):
                                     continue
                             status, note = site.submit()
+                            # If the site showed no confirmation, check email for verification
+                            if status == "uncertain" and person_present:
+                                verified = verify_via_email(session, posting, link, person_present)
+                                if verified:
+                                    status, note = "applied", "confirmed via email"
                         elif reply.startswith("n"):
                             status, note = "declined", "you said no"
                         elif reply.startswith("l"):

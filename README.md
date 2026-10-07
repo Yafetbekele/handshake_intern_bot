@@ -257,7 +257,8 @@ own application form. It asks which list, what to do, and how many:
 - **Found elsewhere** already has each company's own link, so Handshake isn't
   opened at all.
 
-Then, for each posting, it opens the form, attaches your resume, and answers
+Then, for each posting, it opens the form, attaches a resume tailored to that
+job and a cover letter written for it (see **Documents** below), and answers
 what it can from your profile's contact details and `application_answers`.
 
 - **Practice run** fills each form in and sends nothing. Start here.
@@ -377,11 +378,28 @@ filled in. A security check (CAPTCHA) or a code the site emails you is never
 worked around: the tool chimes, you pass it in the browser window, and it
 carries on once the site confirms. With nobody there, that application is left.
 
-**Documents.** Your resume is the one the launcher remembers, or `--resume`.
-A resume or cover letter already made for that posting (by
-`letters_for_list.py` or the Make programs) is used instead. `--tailor-resume`
-makes a resume per job. A cover letter is written when a form requires one;
-`--cover-letters` writes one wherever a form takes one.
+**Documents.** Each posting gets a resume and a cover letter of its own, made
+from `profile/career_profile.json` the same way the Handshake applier makes
+them: Claude writes, and every line is checked against your profile.
+
+- **Resume.** One is tailored to the posting and attached in place of your
+  usual resume. One already made for that posting (by an earlier run,
+  `letters_for_list.py` or the Make programs) is reused. Your usual resume
+  (the one the launcher remembers, or `--resume`) goes out only when a posting
+  has no description saved to tailor from, or tailoring fails.
+  `--usual-resume` attaches your usual resume to everything instead.
+- **Cover letter.** One is written for the posting and attached wherever the
+  form has a place for a cover letter, required or not. A form with nowhere to
+  attach one, but a box that asks for a cover letter in so many words (Lever's
+  "Additional information", on some Ashby forms too), gets the letter typed
+  in. A form with neither gets none, and none is written for it. If you gave
+  the launcher a cover letter of your own, that file is attached as is
+  instead. `--cover-letters-if-required` writes one only where a form requires
+  it, and `--no-cover-letters` writes none.
+- Both are kept in `tailored_resumes/<job>/`, practice runs included, and
+  later runs reuse them. Each is one Claude request on your plan. Without
+  Claude (signed out, or `--no-ai`) the resume is tailored by simple rules and
+  the letter is your baseline letter with the company and role filled in.
 
 **Afterwards.** A posting it applied to is marked Applied, the same as the
 button on the ranked pages, so it drops off every list. Each posting's outcome
@@ -390,9 +408,11 @@ there instead of starting over (`--retry` goes back over earlier ones).
 `--max 10` is how many forms to fill in a run (in automatic mode, how many to
 send), up to 500. It works down the whole list; `--top 50` keeps it to the
 first 50. In automatic mode a form left for want of an answer isn't opened
-again until you've saved new answers. Each form uses one or two Claude
-requests on your plan, so a long run can reach your plan's limit; when Claude
-says it has, the run stops there instead of filling the rest in badly.
+again until you've saved new answers. Each form uses three or four Claude
+requests on your plan (its resume, its cover letter, and one or two for its
+questions), so a long run can reach your plan's limit; when Claude says it
+has, the run stops there instead of filling the rest in badly, and a resume
+or letter it couldn't finish isn't kept.
 
 ### Marking postings you applied to
 

@@ -327,6 +327,9 @@ def document_kind(label: str, hint: str = "") -> str | None:
     return None
 
 
+# A box that asks for a cover letter in so many words (Lever's reads "Add a cover letter or anything else...").
+LETTER_BOX = re.compile(r"\bcover letter\b", re.IGNORECASE)
+
 # Labels for controls a site leaves unlabeled.
 NAME_LABELS = {"opportunityLocationId": "Which location are you applying for?"}
 
@@ -574,7 +577,8 @@ SCAN_JS = r"""
     }
     const raw = fieldLabel(el);
     add(el, { kind: name === 'textarea' ? 'textarea' : 'text', raw, required: isRequired(el, raw), options: [],
-              empty: !tidy(el.value), value: tidy(el.value).slice(0, 200), type, max: el.maxLength > 0 ? el.maxLength : 0 });
+              empty: !tidy(el.value), value: tidy(el.value).slice(0, 200), type, max: el.maxLength > 0 ? el.maxLength : 0,
+              placeholder: tidy(el.getAttribute('placeholder')).slice(0, 200) });
   }
   return out.sort((a, b) => a.y - b.y);
 }
@@ -613,6 +617,9 @@ DocumentSource = Callable[[str, bool], "Path | None"]
 # Writes the answer to an open question: (question, most characters or 0, is
 # it a one-line box). None leaves the question for the student.
 EssayWriter = Callable[[str, int, bool], "str | None"]
+# The cover letter for this posting as plain text, for a form that takes it in
+# a box instead of as a file: (is the box required). None leaves the box alone.
+LetterText = Callable[[bool], "str | None"]
 # Settles what it can of the questions nothing saved answers, from the
 # student's profile. Takes [{"id", "question", "choices" or None, "pick":
 # "one" | "any" | "text"}] and returns {id: (answer, where it comes from)}.
@@ -660,6 +667,8 @@ class EmployerSite:
         self._extra_tabs: list[Any] = []
         self.choices: dict[str, list[str]] = {}  # the choices of lists that had to be opened to read them
         self._essays: EssayWriter | None = None
+        self._letter: LetterText | None = None
+        self._letter_box: tuple[str, str, str] | None = None  # the box the cover letter was typed into
 
     # ------------------------------------------------------------- opening
 
@@ -756,6 +765,7 @@ class EmployerSite:
         self.attached = set()
         self._handled = set()
         self._given = set()
+        self._letter_box = None
         self.choices = {}
 
     def _frames(self) -> list[Any]:
@@ -907,7 +917,8 @@ class EmployerSite:
     # -------------------------------------------------------------- filling
 
     def fill(self, documents: DocumentSource, essays: EssayWriter | None = None,
-             work_out: WorkOut | None = None, best_guess: WorkOut | None = None) -> FormReport:
+             work_out: WorkOut | None = None, best_guess: WorkOut | None = None,
+             letter: LetterText | None = None) -> FormReport:
         """Fill the form in. Returns what was done and what is still empty.
 
         Each question is answered from the first of these that has an answer:
@@ -915,9 +926,13 @@ class EmployerSite:
         an answer written from their profile (`essays`); what `work_out` can
         settle from the profile for the questions still left; the student, at
         the keyboard; and, for what they leave unanswered, `best_guess`.
+
+        `letter` gives the cover letter as text, for a form with a box to type
+        one into and no place to attach it.
         """
         report = FormReport()
         self._essays = essays
+        self._letter = letter
         # Documents first: Lever and Ashby read the resume and fill in a few
         # fields themselves, which the saved answers then correct.
         for item in self.scan():
@@ -1106,6 +1121,15 @@ class EmployerSite:
         saved = self._saved(label)
         if item["empty"]:
             value = str(saved[0]["value"]) if saved else None
+            if value is None and self._takes_letter(item):
+                value = self._letter(bool(item["required"])) or None  # type: ignore[misc]
+                if value and 0 < int(item.get("max") or 0) < len(value):
+                    value = None  # too long for the box; never cut short
+                if value:
+                    self._letter_box = self._key(item)
+                    self._control(item).fill(value)
+                    report.filled.append(f"{label[:60]}: your cover letter for this job, typed in")
+                    return True
             if (value is None and self._essays is not None
                     and essay_answers.is_essay(label, item["kind"], bool(item["required"]))):
                 value = self._essays(label, int(item.get("max") or 0), item["kind"] == "text") or None
@@ -1127,6 +1151,14 @@ class EmployerSite:
         self._control(item).fill(value)
         report.filled.append(f"{label[:60]}: {value[:60]}")
         return True
+
+    def _takes_letter(self, item: dict[str, Any]) -> bool:
+        """Whether this is the box to type a cover letter into: one that says so, on a form with nowhere to attach it."""
+        if self._letter is None or item["kind"] != "textarea" or "cover_letter" in self.attached:
+            return False
+        if self._letter_box not in (None, self._key(item)):
+            return False  # it's already in another box
+        return bool(LETTER_BOX.search(f"{item['label']} {item.get('placeholder', '')}"))
 
     def _choose(self, item: dict[str, Any], ask: bool, want_many: bool = False) -> list[int]:
         """Indexes of the options the student's answers mean."""
