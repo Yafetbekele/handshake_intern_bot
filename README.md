@@ -334,6 +334,26 @@ Some sites redraw their form after reading your resume and empty questions
 already answered; the tool checks at the end and answers those again. If you
 close the browser window, the run stops there instead of carrying on.
 
+Three sites have habits the tool works around:
+
+- **Ashby** saves each answer to its own server as it's given and checks the
+  application against that copy. Answers given faster than it saves them are
+  lost from it, and it then turns the form down with "Missing entry for
+  required field" though the page shows every answer. So on Ashby each answer
+  waits for the last one to be saved, which adds about half a second apiece.
+- **Lever**'s "Current location" keeps only a place picked from its own
+  suggestions, so the tool types your city and state ("Baltimore, MD") and
+  picks the suggestion that is that place.
+- **Automatic runs** never send a form of a kind the tool hasn't seen, or one
+  with nowhere to attach a resume. Those are noted once and not filled in, so
+  no resume, letter or answer is made for them; do them with "asking before
+  each one".
+
+**Kept between runs.** What Claude worked out for a posting's questions (and
+its best-judgement answers) is kept in `tailored_resumes/<job>/form_answers.json`
+with its resume, letter and essays, so going back over a form costs no more
+requests. It's worked out afresh once your profile changes.
+
 **The questions it couldn't answer.** Every time a form is filled in (practice
 runs too), the required questions it had to leave empty, and the ones it could
 only answer with its best judgement, are counted. The same question from
@@ -377,6 +397,30 @@ job, from `profile/career_profile.json` and your baseline cover letter.
 filled in. A security check (CAPTCHA) or a code the site emails you is never
 worked around: the tool chimes, you pass it in the browser window, and it
 carries on once the site confirms. With nobody there, that application is left.
+
+**When a site emails you a code.** Greenhouse in particular, once it has seen a
+few applications from you, won't take the next one until you type in a code it
+emails to the address on the form. That is the site checking a person is
+there, so the tool doesn't read your mail or type the code. What it does:
+
+- It tells you which address the code went to (the email in your profile, the
+  one filled into the form) and waits five minutes for you to type it in.
+  Once the code is in the boxes, the tool presses Submit again for you, so
+  typing it is all you do.
+- If nobody comes, the form is left and later forms in that run are waited on
+  for 45 seconds, not five minutes each.
+- In automatic mode, once one site (all of Greenhouse counts as one) has asked
+  for a code on two applications in a row, or hasn't confirmed three in a row,
+  the rest of that site's postings are left for a run with you there. They
+  aren't used up; a later run comes back to them.
+- **Going back over them.** Pick **4** in the double-click menu (or
+  `python employer_apply.py --stuck`) when you can sit with it. It goes through
+  only the forms a site didn't take after Submit, fills each in again, and
+  asks before sending. Type each code into the form as it arrives. Answer
+  **a** instead if your inbox already has that company's "we received your
+  application" email, and it's marked applied without sending twice.
+- Each time a site doesn't take a form, a picture of the page is kept in
+  `data/submit_problems/`, so you can see what it was waiting for.
 
 **Documents.** Each posting gets a resume and a cover letter of its own, made
 from `profile/career_profile.json` the same way the Handshake applier makes

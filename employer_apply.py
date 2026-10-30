@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import random
 import sys
@@ -40,7 +41,6 @@ import posting_cache
 import prompts
 import tailor
 import unanswered
-from urllib.parse import urlparse
 from employer_sites import (
     FORM_SITES,
     DocumentSource,
@@ -75,7 +75,8 @@ SAYS = {
     "dry_run": "filled in, not sent (practice run)",
     "declined": "skipped, you said no",
     "later": "left for another run",
-    "uncertain": "sent, but no confirmation was seen",
+    "uncertain": "Submit was pressed, but the site never confirmed it",
+    "set_aside": "left for a run with you there",
     "needs_manual": "left for you to finish",
     "needs_account": "needs your own account on the employer's site",
     "closed": "no longer open",
@@ -83,6 +84,63 @@ SAYS = {
     "no_link": "couldn't find the employer's link",
     "failed": "didn't work",
 }
+
+
+# Why an automatic run leaves a form it could open. Neither changes from one run to the next.
+UNFAMILIAR = "a kind of form this tool hasn't seen before; run without --auto-submit to check it yourself"
+NO_RESUME_SLOT = "found nowhere on the form to attach your resume"
+
+SEND = "  Send this application? [y]es / [n]o, never / [l]ater / [q]uit: "
+SEND_STUCK = ("  Send this application? [y]es / [a]lready went through, I have its confirmation email / "
+              "[n]o, never / [l]ater / [q]uit: ")
+
+
+def waiting_on_you(entry: dict[str, Any]) -> bool:
+    """Whether Submit was pressed on this posting's form and the site never took it.
+
+    It wanted a code it emailed, or a security check, or it simply never
+    confirmed. Only the student can finish these, so they're gone back over
+    with --stuck, never automatically.
+    """
+    status, note = str(entry.get("status", "")), str(entry.get("note", ""))
+    return status == "uncertain" or (status == "needs_manual" and note.startswith("the site wanted"))
+
+
+class BackOff:
+    """Notices one kind of site (Greenhouse, say) not taking applications without the student there.
+
+    An automatic run then leaves the rest of that site's postings alone
+    instead of filling in form after form that gets no further.
+    """
+
+    def __init__(self) -> None:
+        self.run: dict[str, list[str]] = {}  # per kind of site, what held up each form since the last one it took
+
+    def saw(self, kind: str, status: str, stuck: str) -> None:
+        if kind not in FORM_SITES:
+            return  # other sites are separate companies; one says nothing about the next
+        if status == "applied":
+            self.run[kind] = []
+        elif stuck in ("code", "check", "unconfirmed"):
+            self.run.setdefault(kind, []).append(stuck)
+
+    def reason(self, kind: str) -> str:
+        """Why this kind of site is left alone for the rest of the run, or "" when it isn't."""
+        seen = self.run.get(kind, [])
+        if len(seen) >= 2 and all(s in ("code", "check") for s in seen[-2:]):
+            return ("is asking for a code it emails you" if seen[-1] == "code" else "is showing a security check") \
+                + " on each application"
+        if len(seen) >= 3:
+            return "hasn't confirmed the last 3 applications"
+        return ""
+
+
+def keep_picture(site: EmployerSite, posting: dict[str, Any]) -> None:
+    """Keep a picture of a form its site didn't take, to see afterwards what the site was waiting for."""
+    name = f"{datetime.now():%Y%m%d-%H%M%S}-{tailor._slug(posting['employer'])[:40]}.png"
+    saved = site.snapshot(DATA_DIR / "submit_problems" / name)
+    if saved is not None:
+        print(f"     a picture of what the page showed is saved in {saved}")
 
 
 # ------------------------------------------------------------------- the lists
@@ -370,7 +428,7 @@ class Papers:
             return None
         found_on = "Handshake" if posting["source"] == "ranked" else "the company's own careers website"
 
-        def settle(questions: list[dict[str, Any]]) -> dict[int, tuple[Any, str]]:
+        def ask_claude(questions: list[dict[str, Any]]) -> dict[int, tuple[Any, str]]:
             if not self._use_ai():  # Claude Code missing or signed out: the questions are asked instead
                 return {}
             print(f"  working out {len(questions)} more answer{'s' if len(questions) != 1 else ''} from your profile...")
@@ -382,7 +440,55 @@ class Papers:
                 print(f"    not used: {note}")
             return settled
 
-        return settle
+        return lambda questions: self._kept_or_asked(posting, "worked", questions, ask_claude)
+
+    def _kept_or_asked(self, posting: dict[str, Any], how: str, questions: list[dict[str, Any]],
+                       ask_claude: WorkOut) -> dict[int, tuple[Any, str]]:
+        """Claude's answers to this posting's questions from an earlier run, and Claude only for the rest.
+
+        Going back over a form (one a site didn't take, say) then costs no
+        requests. They're kept beside the posting's documents, and only while
+        your profile is unchanged: a new or corrected answer of yours can
+        change what follows from it.
+        """
+        path = tailor.OUT_DIR / f"{self._folder_id(posting)}-{tailor._slug(posting['employer'])}" / "form_answers.json"
+        try:
+            stamp = hashlib.sha1(tailor.PROFILE_PATH.read_bytes()).hexdigest()
+        except OSError:
+            return ask_claude(questions)
+        try:
+            kept = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            kept = {}
+        if not isinstance(kept, dict) or kept.get("profile") != stamp:
+            kept = {"profile": stamp}
+        known = kept.setdefault(how, {})
+
+        def key(question: dict[str, Any]) -> str:
+            return norm(str(question["question"]))[:300] + " | " + "; ".join(question.get("choices") or [])
+
+        settled: dict[int, tuple[Any, str]] = {}
+        todo = []
+        for question in questions:
+            hit = known.get(key(question))
+            if isinstance(hit, dict) and "answer" in hit:
+                settled[question["id"]] = (hit["answer"], str(hit.get("because", "")))
+            else:
+                todo.append(question)
+        if settled:
+            print(f"  {len(settled)} answer{'s' if len(settled) != 1 else ''} kept from the last time this form was filled in")
+        fresh = ask_claude(todo) if todo else {}
+        for question in todo:
+            if question["id"] in fresh:
+                settled[question["id"]] = fresh[question["id"]]
+                known[key(question)] = {"answer": fresh[question["id"]][0], "because": fresh[question["id"]][1]}
+        if fresh:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(kept, indent=1, ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                pass
+        return settled
 
     def guesses_for(self, posting: dict[str, Any]) -> WorkOut | None:
         """Best judgement for questions you were asked and left, or None when that's off."""
@@ -390,7 +496,7 @@ class Papers:
             return None
         found_on = "Handshake" if posting["source"] == "ranked" else "the company's own careers website"
 
-        def judge(questions: list[dict[str, Any]]) -> dict[int, tuple[Any, str]]:
+        def ask_claude(questions: list[dict[str, Any]]) -> dict[int, tuple[Any, str]]:
             if not self._use_ai():
                 return {}
             print(f"  using its best judgement on {len(questions)} question{'s' if len(questions) != 1 else ''} you left...")
@@ -402,7 +508,7 @@ class Papers:
                 print(f"    left empty: {note}")
             return settled
 
-        return judge
+        return lambda questions: self._kept_or_asked(posting, "guessed", questions, ask_claude)
 
     def for_posting(self, posting: dict[str, Any]) -> DocumentSource:
         def give(kind: str, required: bool) -> Path | None:
@@ -496,62 +602,6 @@ def note_link_problem(posting: dict[str, Any], why: str, seen: str) -> None:
     print(f"     what the page showed is saved in {path}")
 
 
-def verify_via_email(session: Any, posting: dict[str, Any], link: str, person_present: bool) -> bool:
-    """After a form submit with no confirmation page, check Gmail for a verification email.
-
-    Returns True if verification was found and clicked, False otherwise.
-    """
-    if not person_present:
-        return False  # only verify when someone is at the keyboard
-    try:
-        employer = posting["employer"]
-        # Extract domain from the employer's link to search Gmail
-        domain = urlparse(link).netloc.split(".")[-2]  # e.g., "greenhouse" from "job-boards.greenhouse.io"
-        if not domain or len(domain) < 2:
-            domain = posting["employer"].split()[0].lower()
-
-        # Open Gmail
-        gmail_tab = session.new_tab()
-        gmail_tab.goto("https://gmail.com")
-        print(f"    checking your email for a confirmation from {employer}...")
-
-        # Search for emails from this employer in the last hour
-        try:
-            search_box = gmail_tab.wait_for_selector('input[aria-label="Search"]', timeout=5000)
-            search_box.fill(f"from:{domain} newer_than:1h")
-            search_box.press("Enter")
-            gmail_tab.wait_for_load_state("networkidle", timeout=10000)
-
-            # Look for verification links or buttons
-            emails = gmail_tab.query_selector_all('div[role="main"] a')
-            verification_found = False
-            for email in emails[:5]:  # check first 5 emails
-                text = email.text_content() or ""
-                if any(word in text.lower() for word in ["verify", "confirm", "complete", "activate"]):
-                    print(f"    found: {text[:60]}")
-                    if person_present:
-                        reply = (prompts.ask("    Click this link to verify? [y]es / [n]o: ", None) or "").strip().lower()
-                        if reply.startswith("y"):
-                            email.click()
-                            gmail_tab.wait_for_load_state("networkidle", timeout=10000)
-                            verification_found = True
-                            print("    clicked!")
-                            break
-
-            gmail_tab.close()
-            return verification_found
-        except Exception as exc:
-            print(f"    [note] couldn't search Gmail ({type(exc).__name__})")
-            try:
-                gmail_tab.close()
-            except Exception:
-                pass
-            return False
-    except Exception as exc:
-        print(f"    [note] email verification failed ({type(exc).__name__})")
-        return False
-
-
 def ask_settings(args: argparse.Namespace) -> None:
     """The double-click version: three questions instead of command line flags."""
     def choice(prompt: str, allowed: str, default: str) -> str:
@@ -562,9 +612,11 @@ def ask_settings(args: argparse.Namespace) -> None:
     args.list = {"1": "ranked", "2": "elsewhere", "3": "both"}[choice("Type 1, 2 or 3 [1]: ", "123", "1")]
     print("\nWhat should it do?\n  1. Practice run: fill each form in, send nothing\n"
           "  2. Apply, showing me each filled form and asking before it's sent\n"
-          "  3. Apply automatically to every form it can complete")
-    mode = choice("Type 1, 2 or 3 [2]: ", "123", "2")
-    args.dry_run, args.auto_submit = mode == "1", mode == "3"
+          "  3. Apply automatically to every form it can complete\n"
+          "  4. Go back over the ones a site didn't take after Submit (it emailed a code, or never\n"
+          "     confirmed), with me here to type the code in")
+    mode = choice("Type 1, 2, 3 or 4 [2]: ", "1234", "2")
+    args.dry_run, args.auto_submit, args.stuck = mode == "1", mode == "3", mode == "4" or args.stuck
     reply = (prompts.ask(f"\nHow many applications this run, up to {MOST_PER_RUN}? [{args.max}]: ", None) or "").strip()
     if reply.isdigit() and int(reply) > 0:
         args.max = min(int(reply), MOST_PER_RUN)
@@ -659,6 +711,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--questions", action="store_true",
                         help="show the questions it couldn't answer so far, most common first, and answer them")
     parser.add_argument("--retry", action="store_true", help="include postings settled on earlier runs")
+    parser.add_argument("--stuck", action="store_true",
+                        help="go back over only the forms a site didn't take after Submit (it emailed a code, "
+                             "or never confirmed), asking before each; for when you're there to type the code in")
     parser.add_argument("--resume", help="your resume (default: the one the launcher remembers)")
     parser.add_argument("--usual-resume", action="store_true",
                         help="attach your usual resume as it is, instead of one tailored to each job")
@@ -692,6 +747,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.ask and interactive:
         ask_settings(args)
     config = load_config(args)
+    if args.stuck:
+        if not interactive:
+            raise SystemExit("Going back over the stuck ones needs you at the keyboard: a site that emails a code "
+                             "wants it typed into its form, and this tool never enters one for you.")
+        args.dry_run = args.auto_submit = args.links_only = False
+        config["headless"] = False  # you have to see the form to finish it
     dry_run, auto = bool(args.dry_run), bool(args.auto_submit) and not args.dry_run
     if not dry_run and not auto and not args.links_only and not interactive:
         raise SystemExit("Asking before each application needs a window you can type in. "
@@ -709,14 +770,23 @@ def main(argv: list[str] | None = None) -> int:
         status = record.status(posting["id"])
         if posting["id"] in done or status == "applied" or listing.is_removed(posting["id"]):
             continue
-        if status in SETTLED and not args.retry:
+        if args.stuck:
+            if not waiting_on_you(record.entries.get(posting["id"], {})):
+                continue
+        elif status in SETTLED and not args.retry:
             continue
-        # A form left for want of an answer is only worth opening again once there are new answers.
-        if (status == "needs_manual" and auto and not args.retry
-                and record.entries[posting["id"]].get("answers") == len(answers)
-                and str(record.entries[posting["id"]].get("note", "")).startswith("still empty")):
-            continue
+        if status == "needs_manual" and auto and not args.retry:
+            left = str(record.entries[posting["id"]].get("note", ""))
+            # A form left for want of an answer is only worth opening again once there are new answers,
+            if left.startswith("still empty") and record.entries[posting["id"]].get("answers") == len(answers):
+                continue
+            # and one an automatic run never sends isn't worth opening again at all.
+            if left.startswith((UNFAMILIAR[:20], NO_RESUME_SLOT[:20])):
+                continue
         postings.append(posting)
+    if not postings and args.stuck:
+        print("No form on that list is waiting on you: none got stuck after Submit.")
+        return 0
     if not postings:
         print("Nothing left to try on that list. Run rank_all.py or find_elsewhere.py for fresh postings, "
               "or add --retry to go back over earlier ones.")
@@ -737,6 +807,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("  mode     : " + ("practice run, nothing is sent" if dry_run
                                 else "automatic, complete forms are sent without asking" if auto
+                                else "going back over the ones a site didn't take after Submit; you check each "
+                                     "form, and type in any code the site emails you" if args.stuck
                                 else "you check each filled form before it's sent"))
         print("  resume   : " + (f"tailored to each job from your profile; your usual one ({papers.resume.name}) "
                                  "where that can't be done" if papers.tailor and papers.can_write else str(papers.resume)))
@@ -779,6 +851,7 @@ def main(argv: list[str] | None = None) -> int:
     low, high = (list(config.get("delay_between_employer_applications_seconds", [8, 20])) + [20])[:2]
     counts: dict[str, int] = {}
     kinds: dict[str, int] = {}
+    backing_off = BackOff()
     handled = 0
     signed_in: bool | None = None
 
@@ -826,6 +899,11 @@ def main(argv: list[str] | None = None) -> int:
                 if args.links_only:
                     print(f"  -> {site_name}" + ("  (needs your own account)" if kind == "account" else ""))
                     continue
+                why = backing_off.reason(kind) if auto else ""
+                if why:  # not recorded, so a later run comes back to it
+                    counts["set_aside"] = counts.get("set_aside", 0) + 1
+                    print(f"  -> {SAYS['set_aside']}: {site_name} {why}")
+                    continue
 
                 state, note = site.open(link)
                 if state == "stopped":  # the employer tab was closed; a fresh one, if the browser is still there
@@ -843,6 +921,17 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  -> {SAYS.get(state, state)}: {note}")
                     continue
                 site_name = note
+                # An automatic run never sends these two, so nothing is tailored or written for them.
+                cannot = ""
+                if auto and site.flavor not in FORM_SITES:
+                    cannot = UNFAMILIAR
+                elif auto and not site.takes("resume"):
+                    cannot = NO_RESUME_SLOT
+                if cannot:
+                    record.note(posting, "needs_manual", cannot, link, site_name)
+                    counts["needs_manual"] = counts.get("needs_manual", 0) + 1
+                    print(f"  -> {SAYS['needs_manual']}: {cannot}")
+                    continue
                 if ask is not None:
                     ask.reset()
                 report = site.fill(papers.for_posting(posting), papers.essays_for(posting), papers.answers_for(posting),
@@ -879,7 +968,7 @@ def main(argv: list[str] | None = None) -> int:
                 if report.missing:
                     print("  still empty: " + "; ".join(report.missing[:8]))
 
-                status, note = "", ""
+                status, note, pressed = "", "", False
                 if dry_run:
                     status, note = "dry_run", ""
                     handled += 1
@@ -894,29 +983,26 @@ def main(argv: list[str] | None = None) -> int:
                     if report.missing:
                         status, note = "needs_manual", "still empty: " + "; ".join(report.missing[:6])
                     elif "resume" not in report.attached:
-                        status, note = "needs_manual", "found nowhere on the form to attach your resume"
+                        status, note = "needs_manual", NO_RESUME_SLOT
                     elif site.flavor not in FORM_SITES:
-                        status, note = "needs_manual", ("a kind of form this tool hasn't seen before; "
-                                                        "run without --auto-submit to check it yourself")
+                        status, note = "needs_manual", UNFAMILIAR
                     elif report.written and args.hold_essays:
                         status, note = "needs_manual", ("holds a written answer for you to read first; run without "
                                                         "--auto-submit to see it, or without --hold-essays to send it")
                     else:
                         status, note = site.submit()
-                        # If the site showed no confirmation, check email for verification
-                        if status == "uncertain" and person_present:
-                            verified = verify_via_email(session, posting, link, person_present)
-                            if verified:
-                                status, note = "applied", "confirmed via email"
+                        pressed = True
                         handled += 1
+                        backing_off.saw(kind, status, site.stuck)
                 else:
                     stop = False
                     handled += 1
                     while not status:
                         print("  The filled form is in the browser window. Change anything you like there first.")
-                        reply = (prompts.ask("  Send this application? [y]es / [n]o, never / [l]ater / [q]uit: ", None)
-                                 or "q").strip().lower()
-                        if reply.startswith("y"):
+                        reply = (prompts.ask(SEND_STUCK if args.stuck else SEND, None) or "q").strip().lower()
+                        if reply.startswith("a") and args.stuck:
+                            status, note = "applied", "you said it had already gone through"
+                        elif reply.startswith("y"):
                             missing = site.missing_required()
                             if missing:
                                 print("  These still look empty: " + "; ".join(missing[:8]))
@@ -924,12 +1010,9 @@ def main(argv: list[str] | None = None) -> int:
                                          or "").strip().lower()
                                 if not again.startswith("y"):
                                     continue
+                            site.nobody_came = False  # you answered just now, so a code it emails is waited for in full
                             status, note = site.submit()
-                            # If the site showed no confirmation, check email for verification
-                            if status == "uncertain" and person_present:
-                                verified = verify_via_email(session, posting, link, person_present)
-                                if verified:
-                                    status, note = "applied", "confirmed via email"
+                            pressed = True
                         elif reply.startswith("n"):
                             status, note = "declined", "you said no"
                         elif reply.startswith("l"):
@@ -946,6 +1029,8 @@ def main(argv: list[str] | None = None) -> int:
                 if status == "applied":
                     mark_applied(posting, link)
                 print(f"  -> {SAYS.get(status, status)}" + (f": {note}" if note else ""))
+                if pressed and status in ("uncertain", "needs_manual"):
+                    keep_picture(site, posting)  # what was the site waiting for?
                 if status in {"applied", "uncertain"} and handled < args.max and number < len(postings):
                     pause = random.uniform(float(low), float(high))
                     print(f"  waiting {pause:.0f}s before the next one")
@@ -969,6 +1054,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nEvery posting tried so far, with its employer link: {results}")
     if essays_page is not None and not args.links_only:
         print(f"Every essay written for you so far: {essays_page}")
+    marked = applied_myself.ids()
+    waiting = sum(1 for key, entry in record.entries.items() if key not in marked and waiting_on_you(entry))
+    if waiting and not args.links_only:
+        print(f"\n{waiting} application{'s are' if waiting != 1 else ' is'} waiting on you: Submit was pressed and the "
+              "site didn't take it (it emailed a code to the address on the form, or never confirmed).")
+        print("Start this again and pick 4 when you can sit with it and type the codes in "
+              "(or: python employer_apply.py --stuck).")
     if not args.links_only:
         open_questions = unanswered.ranked(load_answers()[0])
         if open_questions:

@@ -136,6 +136,10 @@ check("'State' alone still finds the state", candidates("State*", saved)[0]["val
 check("one common word in a long question isn't a match",
       candidates("Tell us about a time you worked with a state agency or university on a research project", saved) == [])
 check("'Name' is the student's name", candidates("Name", saved)[0]["value"] == "Jane Doe")
+check("'Name of School' is the school", candidates("Name of School", saved)[0]["value"] == "University of Springfield")
+check("'School Major' and 'School Minor' are not answered with the school's name",
+      not any(a["value"] == "University of Springfield" for a in candidates("School Major", saved) + candidates("School Minor", saved)),
+      (candidates("School Major", saved)[:1], candidates("School Minor", saved)[:1]))
 check("'Company name' is not", candidates("Company name", saved) == [])
 check("a question that only mentions email isn't the email question",
       candidates("Would you like email updates about new roles at Acme and its partners?", saved) == [])
@@ -356,6 +360,8 @@ try:
               sent["fields"]["cards[a][field2]"] == [""] and "cards[c][field1]" not in sent["fields"] and sent["fields"]["org"] == [""])
         check("optional gender from the saved answer", sent["fields"]["eeo[gender]"] == ["Decline to self-identify"])
         check("resume attached", sent["files"].get("resume") == RESUME.name)
+        check("the location is picked from the site's own suggestions, the only way it's kept",
+              sent["fields"]["location"] == ["Springfield, IL, USA"] and sent["fields"]["selectedLocation"][0] != "", sent["fields"].get("location"))
         check("with no cover letter to give, the box that takes one is left empty", sent["fields"]["comments"] == [""], sent["fields"]["comments"])
         remember_answers(PROFILE, site.learned)
 
@@ -368,6 +374,10 @@ try:
         check("a cover letter is typed into the box that asks for one", box == TYPED_LETTER, box)
         check("which the form didn't require", wanted and not any(wanted), wanted)
         check("and the report says so", any("your cover letter" in line for line in report.filled), report.filled)
+        place = next(i for i in site.scan() if i["label"] == "Current location")
+        check("a state spelled out is typed the short way the site understands",
+              site._pick_place(place, "Springfield, Illinois") == "Springfield, IL, USA")
+        check("a city with no state isn't guessed at when the site knows several", site._pick_place(place, "Springfield") is None)
         check("the follow-up box beside it isn't given the letter",
               page.evaluate("() => document.querySelector('textarea[name=\"cards[a][field2]\"]').value") == "")
         wanted.clear()
@@ -404,7 +414,25 @@ try:
               and sent["fields"]["f-degree"] == ["Bachelor's"] and sent["fields"]["f-auth"] == ["yes"]
               and sent["fields"]["f-family"] == ["no"] and sent["fields"]["f-why"] == [""], sent["fields"])
         check("resume went to the resume slot, not the autofill shortcut", sent["files"] == {"resume": RESUME.name}, sent["files"])
+        check("a confirmation worded the company's own way is still recognised, by the box it comes in", "confirmed" in note, note)
         remember_answers(PROFILE, site.learned)
+
+        # Ashby saves each answer to its server as it's given and checks the application against that
+        # copy. Given faster than they're saved, some are lost from it though the page shows them all.
+        sent_before = len(fake_employer_sites.SUBMISSIONS)
+        hasty = EmployerSite(page, answers_now(), ask=None, say=said.append)
+        hasty.open(f"{EMPLOYER}/ashby/acme/{JOB}/application")
+        hasty._settle = lambda: None  # the way it used to give them: one straight after the other
+        report = hasty.fill(documents)
+        status, note = hasty.submit()
+        check("answers given all at once: the page shows them, the site's own copy has lost some, and it turns the form down",
+              report.missing == [] and status == "needs_manual" and "Missing entry for required field" in note, (status, note))
+        check("and nothing is sent", len(fake_employer_sites.SUBMISSIONS) == sent_before)
+        steady = EmployerSite(page, answers_now(), ask=None, say=said.append)
+        steady.open(f"{EMPLOYER}/ashby/acme/{JOB}/application")
+        steady.fill(documents)
+        status, note = steady.submit()
+        check("given one at a time, each after the last is saved, the same form goes through", status == "applied", (status, note))
 
         section("6. PAGES IT MUST LEAVE ALONE, AND ODD ONES")
         site = EmployerSite(page, answers_now(), ask=None, say=said.append)
@@ -551,6 +579,92 @@ try:
         status, note = patient.submit()
         check("with the student there, it waits for them to pass it", status == "applied", (status, note))
         check("and says what the site wants", any("security check" in line for line in said), said)
+
+        # A site that emails a code and won't take the application until it's typed in (Greenhouse
+        # does this). Only the student can give it: the tool says where the code went, and waits.
+        sent_before = len(fake_employer_sites.SUBMISSIONS)
+        site = EmployerSite(page, answers_now(), ask=None, say=said.append)
+        site.open(f"{EMPLOYER}/uncoded/apply")
+        site.fill(documents)
+        check("the posting above this form is longer than the first look at a page takes in",
+              len(page.inner_text("body")) > 7000 and "Send application" not in site._text(page.main_frame))
+        status, note = site.submit()
+        check("a code the site emailed is recognised, even far down a long page, and named with its address",
+              status == "needs_manual" and site.stuck == "code" and "code it emailed to jane.doe@example.edu" in note, (status, note))
+        check("the tool typed nothing into the code box", page.evaluate("() => document.getElementById('security-input-0').value") == "")
+        check("and nothing was sent", len(fake_employer_sites.SUBMISSIONS) == sent_before)
+        check("a box for such a code is never treated as a question to answer",
+              not EmployerSite._needs_answer({"required": True, "empty": True, "label": "Security code", "kind": "text"}))
+        check("that posting counts as waiting on the student", employer_apply.waiting_on_you({"status": status, "note": note}))
+        check("so does one where Submit was pressed and the site never confirmed", employer_apply.waiting_on_you({"status": "uncertain", "note": ""}))
+        check("one left for want of an answer doesn't, and neither does one that went through",
+              not employer_apply.waiting_on_you({"status": "needs_manual", "note": "still empty: Why us?"})
+              and not employer_apply.waiting_on_you({"status": "applied", "note": ""}))
+
+        there = EmployerSite(page, answers_now(), ask=None, person_present=True, patience=20, say=said.append)
+        there.open(f"{EMPLOYER}/coded/apply")
+        there.fill(documents)
+        said.clear()
+        status, note = there.submit()
+        check("with the student there to type the code in, it waits and the application goes through", status == "applied", (status, note))
+        check("once they've typed it, the form is sent again for them", any("being sent again" in line for line in said), said)
+        check("having told them which address the code went to, and that typing it is theirs to do",
+              any("emailed a code to jane.doe@example.edu" in line for line in said) and any("yourself" in line for line in said), said)
+        check("and the form arrived", len(fake_employer_sites.SUBMISSIONS) == sent_before + 1 and last("/coded")["fields"]["email"] == ["jane.doe@example.edu"])
+
+        away = EmployerSite(page, answers_now(), ask=None, person_present=True, patience=4, say=said.append)
+        away.open(f"{EMPLOYER}/uncoded/apply")
+        away.fill(documents)
+        status, note = away.submit()
+        check("when nobody comes to type it, the form is left as waiting on that code",
+              status == "needs_manual" and away.stuck == "code" and away.nobody_came and "didn't confirm in time" in note, (status, note))
+        shot = away.snapshot(WORK / "pictures" / "stuck.png")
+        check("a picture of what the page showed can be kept", shot is not None and shot.stat().st_size > 1000)
+        import employer_sites  # noqa: E402
+        import time  # noqa: E402
+        employer_sites.QUIET_WAIT, away.patience = 3, 300
+        away.open(f"{EMPLOYER}/uncoded/apply")
+        away.fill(documents)
+        said.clear()
+        started = time.monotonic()
+        away.submit()
+        check("after that, later forms in the run aren't waited on for minutes",
+              time.monotonic() - started < 60 and any("3 seconds" in line for line in said), (time.monotonic() - started, said))
+        employer_sites.QUIET_WAIT = 45
+
+        import argparse  # noqa: E402
+        papers = employer_apply.Papers({}, argparse.Namespace())
+        job = {"id": "kept-1", "employer": "Acme", "title": "Intern", "description": "", "source": "elsewhere"}
+        questions = [{"id": 1, "question": "How did you hear about us?", "choices": ["Handshake", "Other"], "pick": "one"},
+                     {"id": 2, "question": "Favorite tool?", "choices": None, "pick": "text"}]
+        put_to_claude: list[list[int]] = []
+
+        def pretend(asked_now: list[dict]) -> dict:
+            put_to_claude.append([q["id"] for q in asked_now])
+            return {q["id"]: ("Handshake", "found on Handshake") for q in asked_now if q["id"] == 1}
+
+        first = papers._kept_or_asked(job, "worked", questions, pretend)
+        again = papers._kept_or_asked(job, "worked", questions, pretend)
+        check("an answer Claude worked out is kept, so filling the same form in again doesn't ask for it twice",
+              first == again == {1: ("Handshake", "found on Handshake")} and put_to_claude == [[1, 2], [2]], put_to_claude)
+        PROFILE.write_text(PROFILE.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        papers._kept_or_asked(job, "worked", questions, pretend)
+        check("until the profile changes, when it's worked out afresh", put_to_claude[-1] == [1, 2], put_to_claude)
+
+        backing_off = employer_apply.BackOff()
+        backing_off.saw("greenhouse", "needs_manual", "code")
+        check("one form held up by a code doesn't stop a run", backing_off.reason("greenhouse") == "")
+        backing_off.saw("greenhouse", "needs_manual", "code")
+        check("two in a row on one kind of site leaves the rest of that site for a run with the student there",
+              "code it emails you" in backing_off.reason("greenhouse") and backing_off.reason("lever") == "")
+        backing_off.saw("greenhouse", "applied", "")
+        check("until one goes through again", backing_off.reason("greenhouse") == "")
+        for _ in range(3):
+            backing_off.saw("ashby", "uncertain", "unconfirmed")
+        check("three in a row that never confirm do the same", "hasn't confirmed" in backing_off.reason("ashby"))
+        for _ in range(5):
+            backing_off.saw("other", "needs_manual", "code")
+        check("separate companies' own sites say nothing about each other", backing_off.reason("other") == "")
         browser.close()
 
     section("7. WHERE A HANDSHAKE POSTING'S 'APPLY EXTERNALLY' LEADS")
@@ -601,7 +715,7 @@ try:
     try:
         sent_before = len(fake_employer_sites.SUBMISSIONS)
         tailored = WORK / "tailored"
-        code = employer_apply.main(["--list", "elsewhere", "--dry-run", "--usual-resume", "--no-cover-letters"] + common)
+        code = employer_apply.main(["--list", "elsewhere", "--dry-run", "--usual-resume", "--no-cover-letters", "--no-essays"] + common)
         check("with --usual-resume and --no-cover-letters, no resume or letter is made",
               code == 0 and not list(tailored.glob("*/*_Resume.pdf")) and not list(tailored.glob("*/*_Cover_Letter.pdf")),
               [str(p) for p in tailored.glob("*/*.pdf")])
@@ -659,8 +773,9 @@ try:
         check("without the parts Claude invented", "hackathon" not in typed_in and "Kubernetes" not in typed_in, typed_in)
         check("Workday left for the student", statuses.get("wd-big-1") == "needs_account")
         check("the closed posting noted", statuses.get("gone-1") == "closed")
-        check("with --no-essays the essay form is left for the student", statuses.get("essay-1") == "needs_manual" and "Why do you want" in log["essay-1"]["note"], log.get("essay-1"))
         check("an unfamiliar form isn't sent unchecked", statuses.get("plain-1") == "needs_manual" and "hasn't seen" in log["plain-1"]["note"], log.get("plain-1"))
+        check("and an automatic run doesn't fill one in either, so nothing is tailored or written for it",
+              statuses.get("essay-1") == "needs_manual" and "hasn't seen" in log["essay-1"]["note"] and log["essay-1"]["answered"] == [], log.get("essay-1"))
         check("applied ones are marked like the Applied button", applied_myself.ids() == {"ab-acme-1", "gh-acme-1", f"lv-acme-{JOB}", "1002"}, applied_myself.ids())
         check("the record keeps questions, not answers", "jane.doe@example.edu" not in json.dumps(log) and "Email" in log["gh-acme-1"]["answered"])
         rows = list(csv.DictReader((listing / "employer_site_results.csv").open(encoding="utf-8")))
@@ -678,8 +793,16 @@ try:
         code = employer_apply.main(["--list", "both", "--auto-submit", "--no-essays"] + common)
         check("a second run finishes", code == 0)
         check("and never applies to the same posting twice", len(fake_employer_sites.SUBMISSIONS) == sent_before)
-        check("a form left for want of an answer isn't reopened until there are new answers",
+        check("a form an automatic run can't send isn't opened again on the next one",
               json.loads((data / "employer_applications.json").read_text(encoding="utf-8"))["essay-1"]["when"] == log["essay-1"]["when"])
+
+        try:
+            employer_apply.main(["--list", "both", "--stuck"] + common)
+            refused = ""
+        except SystemExit as exc:
+            refused = str(exc)
+        check("going back over forms stuck after Submit is never done with nobody at the keyboard",
+              "keyboard" in refused and "never enters one" in refused, refused)
     finally:
         builtins.input = real_input
         employer_apply.load_config = config

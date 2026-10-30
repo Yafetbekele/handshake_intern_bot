@@ -31,7 +31,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 import essay_answers
-from handshake import NEVER_FILL, SENSITIVE_QUESTION, PlaywrightTimeout, chime
+from handshake import NEVER_FILL, SENSITIVE_QUESTION, US_STATES, PlaywrightTimeout, chime
 
 # ------------------------------------------------------------------ which site
 
@@ -62,6 +62,11 @@ ACCOUNT_SITES = {
 }
 
 SITE_NAMES = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby"}
+
+# Sites that save each answer to their own server as it's given, and the address that save goes to.
+# Ashby checks the application against that copy, and answers given faster than it saves them are
+# lost from it ("Missing entry for required field"), so each one is waited for before the next.
+SAVES = {"ashby": "ApiSetFormValue"}
 
 
 def _host_matches(host: str, domains: tuple[str, ...]) -> bool:
@@ -138,6 +143,13 @@ NOT_THE_USUAL = re.compile(
 )
 
 
+# The school's name answers "School" and "Name of school", but not a question that only mentions the school.
+SCHOOL_WORDS = {"school", "university", "college"}
+ABOUT_SCHOOL = re.compile(
+    r"\b(major|minor|discipline|field of study|area of study|degree|gpa|grade|graduat\w*|year|date|month|start|end|"
+    r"type|level|high school|address|city|state|location|email|standing|classification|clubs?|activities)\b")
+
+
 def candidates(label: str, answers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Saved answers that fit this question, best first.
 
@@ -166,6 +178,8 @@ def candidates(label: str, answers: list[dict[str, Any]]) -> list[dict[str, Any]
                 continue
             if words > int(answer.get("max_words", 99)):
                 continue
+            if p in SCHOOL_WORDS and ABOUT_SCHOOL.search(text):
+                continue  # "School Major" asks for the major, not for the school's name
             if len(p) >= 40 and text.startswith(p):  # a long question saved cut short
                 best = max(best, len(p))
             elif _has_words(text, p) and (" " in p or words <= 8):
@@ -347,11 +361,45 @@ CONFIRM_TEXT = re.compile(
     r"thank you for applying|thanks for applying|thank you for your application|"
     r"application (has been|was) (successfully )?(submitted|received|sent)|"
     r"(successfully|has been) submitted|we('ve| have) received your application|"
-    r"application submitted|application received|your application is (in|complete)",
+    r"application submitted|application received|your application is (in|complete)|"
+    r"thank(s| you) for submitting",
     re.IGNORECASE,
 )
-CODE_TEXT = re.compile(r"(verification|security) code|code (we )?sent to|enter the code|check your email for a code",
-                       re.IGNORECASE)
+# Ashby swaps the form for a box of its own once it has taken the application, whatever words the company put in it.
+TAKEN_JS = r"""
+() => [...document.querySelectorAll('[class*="application-form-success"]')]
+  .some(el => { const s = getComputedStyle(el); return s.display !== 'none' && s.visibility !== 'hidden' && !!(el.offsetWidth || el.offsetHeight); })
+"""
+CODE_TEXT = re.compile(r"(verification|security) code|code (we |was |has been )?sent to|enter the code|"
+                       r"check your email for a code", re.IGNORECASE)
+# The boxes a site puts up for a code it emailed (Greenhouse's are security-input-0 to -7).
+CODE_BOX_JS = r"""
+() => [...document.querySelectorAll('input[autocomplete="one-time-code"], input[id^="security-input"], input[name*="security_code" i], input[name*="verification_code" i], input[id*="verification-code" i]')]
+  .some(el => { const s = getComputedStyle(el); return s.display !== 'none' && s.visibility !== 'hidden' && !!(el.offsetWidth || el.offsetHeight); })
+"""
+# Whether the student has typed the whole code in. Gives back a mark that changes when the code does,
+# never the code itself.
+CODE_TYPED_JS = r"""
+() => {
+  const shown = el => { const s = getComputedStyle(el); return s.display !== 'none' && s.visibility !== 'hidden' && !!(el.offsetWidth || el.offsetHeight); };
+  const boxes = [...document.querySelectorAll('input[autocomplete="one-time-code"], input[id^="security-input"], input[name*="security_code" i], input[name*="verification_code" i], input[id*="verification-code" i]')].filter(shown);
+  if (!boxes.length) return '';
+  const typed = boxes.map(b => (b.value || '').trim());
+  if (typed.some(v => !v)) return '';
+  const all = typed.join('');
+  const want = boxes.length > 1 ? boxes.length : (boxes[0].maxLength > 0 ? boxes[0].maxLength : 6);
+  if (all.length < want) return '';
+  let mark = 7;
+  for (const c of all) mark = (mark * 31 + c.charCodeAt(0)) % 1000003;
+  return all.length + ':' + mark;
+}
+"""
+# A box for such a code is never answered: not from saved answers, not by Claude, not by asking.
+CODE_FIELD = re.compile(r"\b(security|verification|one[- ]time|confirmation) code\b", re.IGNORECASE)
+# Once nobody has come to a form that needed them, later ones in the run wait this long (seconds) instead of minutes.
+QUIET_WAIT = 45
+# Enough characters to take in all of a page's text, where the first few thousand would stop inside the posting.
+WHOLE_PAGE = 400_000
 APPLY_LINK = re.compile(
     r"^\s*(apply|apply now|apply here|apply today|apply for (this|the) (job|position|role)|"
     r"start (your )?application|i.m interested)\s*$",
@@ -600,7 +648,7 @@ ERRORS_JS = r"""
   for (const el of document.querySelectorAll('[role="alert"], [class*="error" i], [class*="invalid" i]')) {
     if (!shown(el) || el.querySelector('input, select, textarea, form')) continue;
     const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
-    if (t && t.length < 160 && !found.includes(t)) found.push(t);
+    if (t && t.length < 900 && !found.includes(t)) found.push(t.slice(0, 300));
   }
   return found.slice(0, 4);
 }
@@ -669,8 +717,44 @@ class EmployerSite:
         self._essays: EssayWriter | None = None
         self._letter: LetterText | None = None
         self._letter_box: tuple[str, str, str] | None = None  # the box the cover letter was typed into
+        # What the last submit() was held up by when it gave up: "code" (one the site
+        # emailed), "check" (a security check), "refused", "unconfirmed", or "".
+        self.stuck = ""
+        self.nobody_came = False  # a form needed the student and they never came; later waits are short
+        self._saving = 0  # answers the site is still saving to its server
+        self._watched: Any = None  # the tab whose saves are being counted
 
     # ------------------------------------------------------------- opening
+
+    def _watch_saves(self) -> None:
+        """Start counting the saves a site makes for each answer, where it works that way."""
+        self._saving = 0
+        if self.flavor not in SAVES or self._watched is self.page:
+            return
+        self._watched = self.page
+
+        def began(request: Any) -> None:
+            if SAVES.get(self.flavor, "\0") in request.url:
+                self._saving += 1
+
+        def ended(request: Any) -> None:
+            if SAVES.get(self.flavor, "\0") in request.url:
+                self._saving = max(0, self._saving - 1)
+
+        self.page.on("request", began)
+        self.page.on("requestfinished", ended)
+        self.page.on("requestfailed", ended)
+
+    def _settle(self) -> None:
+        """Wait for the site to finish saving the answer just given, before the next one is."""
+        if self.flavor not in SAVES:
+            return
+        self._pause(250)  # the save sets off a moment after the answer
+        deadline = time.monotonic() + 8
+        quiet = 0
+        while quiet < 2 and time.monotonic() < deadline:
+            quiet = quiet + 1 if self._saving == 0 else 0
+            self._pause(100)
 
     def open(self, url: str) -> tuple[str, str]:
         """Go to a posting's form. Returns (state, note); state "form" means ready to fill.
@@ -716,6 +800,7 @@ class EmployerSite:
                         self.root = info.get("selector") or ""
                         self.flavor = info.get("flavor") or (kind if kind in FORM_SITES else "")
                         if self._is_application():
+                            self._watch_saves()
                             return "form", SITE_NAMES.get(self.flavor, "a form this tool hasn't seen before")
                         self.frame, self.root, self.flavor = self.page.main_frame, "", ""
                 closed = "error=true" in self.page.url or bool(CLOSED_TEXT.search(self._text(self.page.main_frame)))
@@ -903,6 +988,11 @@ class EmployerSite:
                 missing.append(label[:90])
         return missing
 
+    def takes(self, kind: str) -> bool:
+        """Whether the form has a place to attach this document ("resume", "cover_letter", "transcript")."""
+        return any(item["kind"] == "file" and document_kind(item["label"], item.get("hint", "")) == kind
+                   for item in self.scan())
+
     def unanswered(self) -> list[dict[str, Any]]:
         """The required questions still empty, each with its choices: [{"label", "options"}]. Not files."""
         found: list[dict[str, Any]] = []
@@ -976,15 +1066,19 @@ class EmployerSite:
     @staticmethod
     def _needs_answer(item: dict[str, Any]) -> bool:
         return bool(item["required"] and item["empty"] and item["label"]
-                    and item["kind"] != "file" and not NEVER_FILL.search(item["label"]))
+                    and item["kind"] != "file" and not NEVER_FILL.search(item["label"])
+                    and not CODE_FIELD.search(item["label"]))
 
     def _try(self, item: dict[str, Any], report: FormReport, overwrite: bool, ask: bool = False) -> bool:
         """Answer one question if there is an answer for it. True when it now has one."""
+        before = len(report.filled)
         try:
             answered = self._answer(item, report, overwrite, ask)
         except Exception as exc:  # one awkward control never stops the form
             self.say(f"  [note] couldn't fill in \"{item['label'][:60]}\" ({type(exc).__name__})")
             return False
+        if len(report.filled) > before:
+            self._settle()  # where the site saves answers one by one, this one lands before the next
         if answered and item["empty"]:
             self._given.add(self._key(item))
         return answered
@@ -1018,6 +1112,7 @@ class EmployerSite:
         self.attached.add(kind)
         report.attached.add(kind)
         report.filled.append(f"{kind.replace('_', ' ')}: {Path(path).name}")
+        self._settle()
 
     def _after_upload(self) -> None:
         """Give the site a moment to take the file in (and read it, if it does that)."""
@@ -1106,7 +1201,7 @@ class EmployerSite:
 
     def _answer(self, item: dict[str, Any], report: FormReport, overwrite: bool, ask: bool = False) -> bool:
         label, kind = item["label"], item["kind"]
-        if not label or NEVER_FILL.search(label):
+        if not label or NEVER_FILL.search(label) or CODE_FIELD.search(label):
             return False  # a required one shows up as still empty, for the student
         if kind in ("text", "textarea"):
             return self._answer_text(item, report, overwrite, ask)
@@ -1148,9 +1243,53 @@ class EmployerSite:
             value = str(saved[0]["value"]) if saved and overwrite else None
             if not value or _loose(value) == _loose(item.get("value", "")):
                 return True
+        if self.flavor == "lever" and "location-input" in item.get("hint", ""):
+            # Lever's location box keeps only a place picked from its own suggestions.
+            picked = self._pick_place(item, value)
+            if picked is None:
+                return False
+            report.filled.append(f"{label[:60]}: {picked[:60]}")
+            return True
         self._control(item).fill(value)
         report.filled.append(f"{label[:60]}: {value[:60]}")
         return True
+
+    def _pick_place(self, item: dict[str, Any], value: str) -> str | None:
+        """Type a place into a box that suggests places, and pick the suggestion that is that place."""
+        control = self._control(item)
+        city, _, rest = value.partition(",")
+        city, region = city.strip(), rest.split(",")[0].strip()
+        short = next((code for code, name in US_STATES.items() if region.lower() in (name.lower(), code.lower())), "")
+        tries = ([f"{city}, {short}"] if short else []) + [value, city]
+        for query in dict.fromkeys(q for q in tries if q):
+            try:
+                control.fill("")
+                control.click()
+                control.press_sequentially(query, delay=35)  # suggestions come on key presses, not on a value set at once
+                options = self.frame.locator(".dropdown-location:visible")
+                options.first.wait_for(state="visible", timeout=4000)
+                texts = [" ".join(t.split()) for t in options.all_inner_texts()]
+            except Exception:
+                continue
+            # The same city, and the same state ("Baltimore, OH" is another place). With no state in
+            # the answer, only a city the site knows just one of.
+            fits = []
+            for index, text in enumerate(texts):
+                parts = [p.strip().lower() for p in text.split(",")]
+                same_state = bool(region) and ((short and short.lower() in parts) or region.lower() in parts)
+                if parts and parts[0] == city.lower() and (same_state or not region):
+                    fits.append(index)
+            if fits and (region or len(fits) == 1):
+                try:
+                    options.nth(fits[0]).click()
+                except Exception:
+                    continue
+                return texts[fits[0]]
+        try:
+            control.fill("")
+        except Exception:
+            pass
+        return None
 
     def _takes_letter(self, item: dict[str, Any]) -> bool:
         """Whether this is the box to type a cover letter into: one that says so, on a form with nowhere to attach it."""
@@ -1331,13 +1470,19 @@ class EmployerSite:
         return None
 
     def _confirm_text(self) -> bool:
+        # The whole page: what a site says after Submit is often below a long posting.
         frames = [self.page.main_frame] + ([self.frame] if self.frame is not self.page.main_frame else [])
-        return any(CONFIRM_TEXT.search(self._text(f)) for f in frames)
+        return any(CONFIRM_TEXT.search(self._text(f, WHOLE_PAGE)) for f in frames)
 
     def _confirmed(self, url_before: str, said_before: bool) -> bool:
         url = self.page.url
         if url != url_before and CONFIRM_URL.search(urlparse(url).path):
             return True
+        try:
+            if self.frame.evaluate(TAKEN_JS):
+                return True
+        except Exception:
+            pass
         return self._confirm_text() and not said_before
 
     def _captcha_showing(self) -> bool:
@@ -1355,21 +1500,65 @@ class EmployerSite:
         except Exception:
             return []
 
+    def _code_wanted(self) -> bool:
+        """Whether the site is asking for a code it emailed. Only the student can give it one."""
+        for frame in {self.page.main_frame, self.frame}:
+            try:
+                if CODE_TEXT.search(self._text(frame, WHOLE_PAGE)) or frame.evaluate(CODE_BOX_JS):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _code_typed(self) -> str:
+        """A mark for the code the student has typed in full, or "" while it isn't all there."""
+        for frame in {self.page.main_frame, self.frame}:
+            try:
+                mark = frame.evaluate(CODE_TYPED_JS)
+                if mark:
+                    return str(mark)
+            except Exception:
+                continue
+        return ""
+
+    def _email_on_form(self) -> str:
+        """The email address in the form: where the site sends its code, and its confirmation."""
+        try:
+            for item in self.scan():
+                value = str(item.get("value") or "")
+                if item["kind"] == "text" and "@" in value and (
+                        item.get("type") == "email" or re.search(r"\be-?mail\b", item["label"], re.IGNORECASE)):
+                    return value
+        except Exception:
+            pass
+        return ""
+
+    def snapshot(self, path: Path) -> Path | None:
+        """A picture of the page as it stands, to see afterwards what a site was waiting for."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.page.screenshot(path=str(path), full_page=True)
+        except Exception:
+            return None
+        return path
+
     def submit(self) -> tuple[str, str]:
         """Press Submit and wait for the site to say it went through.
 
         Returns (status, note): applied, needs_manual (the site wanted
-        something more and nobody gave it) or uncertain (sent, no confirmation
-        seen).
+        something more and nobody gave it) or uncertain (Submit was pressed
+        and the site never confirmed). `self.stuck` says what held it up.
         """
+        self.stuck = ""
         self._repair()  # a last look: a site can empty an answer between filling and sending
+        email = self._email_on_form()
         button = self._submit_button()
         if button is None:
             if self._confirm_text():  # the student pressed it themselves
                 return "applied", "the employer's site shows it was sent"
             return "needs_manual", "couldn't find the form's Submit button"
         url_before, said_before = self.page.url, self._confirm_text()
-        code_before = bool(CODE_TEXT.search(self._text(self.frame)))
+        code_before = self._code_wanted()
         errors_before = set(self._errors())
         try:
             button.scroll_into_view_if_needed()
@@ -1380,6 +1569,7 @@ class EmployerSite:
         clicked = time.monotonic()
         deadline = clicked + 25
         handed_over = retried = False
+        sent_with = ""  # the mark of the code the form was last sent again with
         refused = ""  # what the site said was wrong with the form, if it turned it down
         while True:
             try:
@@ -1387,12 +1577,15 @@ class EmployerSite:
             except Exception:
                 return "uncertain", "the browser tab closed after Submit was pressed"
             if self._confirmed(url_before, said_before):
+                self.stuck = ""
+                if handed_over:
+                    self.nobody_came = False
                 return "applied", "the employer's site confirmed it"
             wants = ""
             if self._captcha_showing():
-                wants = "a security check"
-            elif not code_before and CODE_TEXT.search(self._text(self.frame)):
-                wants = "a code it emailed you"
+                wants, self.stuck = "a security check", "check"
+            elif not code_before and self._code_wanted():
+                wants, self.stuck = (f"the code it emailed to {email}" if email else "a code it emailed you"), "code"
             else:
                 problems = [p for p in self._errors() if p not in errors_before] if time.monotonic() - clicked > 3 else []
                 if problems:
@@ -1412,24 +1605,51 @@ class EmployerSite:
                             except Exception:
                                 pass
                 if time.monotonic() >= deadline:
-                    if refused and (handed_over or not self.person_present):
-                        return "needs_manual", f"the site turned the form down: {refused}"
-                    if not refused and (handed_over or not self.person_present):
+                    self.stuck = "refused" if refused else "unconfirmed"
+                    if handed_over or not self.person_present:
+                        self.nobody_came = self.nobody_came or handed_over
+                        if refused:
+                            return "needs_manual", f"the site turned the form down: {refused}"
                         return "uncertain", "Submit was pressed but the site showed no confirmation; check your email"
                     wants = ("something fixed: " + refused) if refused else "something more before it confirms"
             if not wants:
                 continue
             if handed_over:
+                if self.stuck == "code":
+                    # Once the student has typed the code in, the form is sent again for them:
+                    # the same press as before. The code itself is theirs to give.
+                    typed = self._code_typed()
+                    if typed and typed != sent_with:
+                        sent_with = typed
+                        again = self._submit_button()
+                        try:
+                            if again is not None and again.is_enabled():
+                                self._pause(500)
+                                again.click()
+                                self.say("  The code is in, so the form is being sent again...")
+                                deadline = max(deadline, time.monotonic() + 45)
+                        except Exception:
+                            pass
                 if time.monotonic() >= deadline:
+                    self.nobody_came = True
                     return "needs_manual", f"the site wanted {wants} and didn't confirm in time"
                 continue
             if not self.person_present:
                 return "needs_manual", f"the site wanted {wants}"
             handed_over = True
-            deadline = time.monotonic() + self.patience
-            self.say(f"  The site wants {wants}.")
-            self.say("  Finish it in the browser window (press its Submit button if it asks again);"
-                     f" waiting up to {round(self.patience / 60)} minutes for the confirmation.")
+            # Nobody came to the last form that needed them, so this one isn't waited on for long.
+            wait = min(self.patience, QUIET_WAIT) if self.nobody_came else self.patience
+            deadline = time.monotonic() + wait
+            how_long = f"{round(wait / 60)} minutes" if wait >= 90 else f"{round(wait)} seconds"
+            if self.stuck == "code":
+                self.say(f"  The site emailed a code to {email or 'the address on the form'} and won't take the"
+                         " application until it's typed in.")
+                self.say("  Type it into the boxes at the bottom of the form in the browser window yourself (this tool"
+                         f" never enters one). Once it's in, the form is sent for you; waiting up to {how_long}.")
+            else:
+                self.say(f"  The site wants {wants}.")
+                self.say("  Finish it in the browser window (press its Submit button if it asks again);"
+                         f" waiting up to {how_long} for the confirmation.")
             try:
                 self.page.bring_to_front()
             except Exception:

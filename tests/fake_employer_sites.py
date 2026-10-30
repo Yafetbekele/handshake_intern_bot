@@ -30,6 +30,7 @@ import email
 import html
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -249,6 +250,29 @@ document.getElementById('resume-upload-input').addEventListener('change', functi
     working.classList.add('hidden'); ok.classList.remove('hidden');
   }}, 900);
 }});
+// Like Lever's location box: suggestions come as you type "City" or "City, ST" (a state spelled out
+// finds nothing), and text that wasn't picked from them is thrown away when you move on.
+(function () {{
+  var box = document.getElementById('location-input'), hidden = document.getElementById('selected-location');
+  var list = document.createElement('div');
+  list.className = 'dropdown-results';
+  box.parentElement.appendChild(list);
+  box.addEventListener('keyup', function () {{
+    hidden.value = '';
+    var typed = box.value.trim(), found = [];
+    var exact = typed.match(/^([A-Za-z .]+), ([A-Z]{{2}})$/);
+    if (exact) found = [exact[1] + ', ' + exact[2] + ', USA'];
+    else if (/^[A-Za-z .]+$/.test(typed)) found = [typed + ', MO, USA', typed + ', IL, USA'];
+    list.innerHTML = found.map(function (f, n) {{ return '<div class="dropdown-location" id="location-' + n + '">' + f + '</div>'; }}).join('');
+  }});
+  list.addEventListener('mousedown', function (event) {{
+    if (!event.target.classList.contains('dropdown-location')) return;
+    box.value = event.target.textContent;
+    hidden.value = JSON.stringify({{ name: event.target.textContent }});
+    list.innerHTML = '';
+  }});
+  box.addEventListener('blur', function () {{ setTimeout(function () {{ if (!hidden.value) box.value = ''; list.innerHTML = ''; }}, 200); }});
+}})();
 document.getElementById('btn-submit').addEventListener('click', function () {{
   var form = document.getElementById('application-form'), missing = [];
   ['name', 'email'].forEach(function (n) {{ if (!form.querySelector('[name="' + n + '"]').value.trim()) missing.push(n); }});
@@ -260,6 +284,16 @@ document.getElementById('btn-submit').addEventListener('click', function () {{
   form.submit();
 }});
 </script></body></html>"""
+
+
+# The answers Ashby's server holds for each open form, and the ones it insists on.
+ASHBY_FORMS: dict[str, dict[str, str]] = {}
+ASHBY_REQUIRED = {
+    "_systemfield_name": "Name", "f-legal": "Legal First and Last Name", "_systemfield_email": "Email",
+    "f-linkedin": "LinkedIn Profile", "f-degree": "Degree Level Currently Pursuing",
+    "f-auth": "Are you legally authorized to work in the United States?",
+    "f-family": "Are you related to any current Acme employees?",
+}
 
 
 def ashby_entry(field_id: str, label: str, inner: str, required: bool = False) -> str:
@@ -312,9 +346,22 @@ def ashby_page(action: str) -> str:
 <button class="_button_zyh3g_28 _primary_zyh3g_97" id="send">Submit Application</button>
 </div>
 <script>
+// Like Ashby, every answer is sent to the server as it's given, and the server keeps its own copy.
+var formId = 'render-' + Math.random().toString(36).slice(2);
+function save(path, value) {{
+  fetch('/ashby/api?op=ApiSetFormValue', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ form: formId, path: path, value: value }}) }});
+}}
+document.querySelectorAll('#form input[type="text"], #form input[type="email"], #form textarea').forEach(function (el) {{
+  el.addEventListener('input', function () {{ save(el.name, el.value); }});
+}});
+document.querySelectorAll('#form input[type="radio"]').forEach(function (el) {{
+  el.addEventListener('change', function () {{ save(el.name, el.value); }});
+}});
 document.querySelectorAll('.ashby-application-form-input-yesno button').forEach(function (b) {{
   b.addEventListener('click', function () {{
     b.parentElement.querySelectorAll('button').forEach(function (x) {{ x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); x.classList.toggle('_active_1svni_57', x === b); }});
+    save(b.parentElement.querySelector('input').name, b.getAttribute('data-option'));
   }});
 }});
 document.getElementById('send').addEventListener('click', function () {{
@@ -335,15 +382,30 @@ document.getElementById('send').addEventListener('click', function () {{
   var autofill = document.querySelector('#form input[type="file"]:not([id])').files[0];
   if (autofill) data['__autofill'] = autofill.name;
   if (missing.length) {{ document.getElementById('errors').innerHTML = '<p class="_error_x" role="alert">Missing: ' + missing.join(', ') + '</p>'; return; }}
-  fetch({json.dumps(action)}, {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify(data) }})
-    .then(function () {{ document.getElementById('form').innerHTML = '<h2>Success</h2><p>Your application was successfully submitted. We will be in touch.</p>'; }});
+  fetch({json.dumps(action)} + '?form=' + formId, {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify(data) }})
+    .then(function (reply) {{ return reply.json(); }})
+    .then(function (reply) {{
+      if (reply.missing && reply.missing.length) {{
+        // What the page shows and what the server holds can differ; the server's copy is what counts.
+        document.getElementById('errors').innerHTML = '<div class="_error_x" role="alert"><p>Your form needs corrections</p><ul>'
+          + reply.missing.map(function (m) {{ return '<li>Missing entry for required field: ' + m + '</li>'; }}).join('') + '</ul></div>';
+        return;
+      }}
+      // Each company words this box its own way.
+      document.getElementById('form').innerHTML = '<div class="_success_1 ashby-application-form-success-container"><h2>Success</h2>'
+        + '<p>We are thrilled you would consider joining us. The team will be in touch if there could be a fit.</p></div>';
+    }});
 }});
 </script></body></html>"""
 
 
 def plain_page(action: str, required_essay: bool = False, captcha: bool = False, quiz: bool = False,
-               wiping: bool = False, rejecting: str = "") -> str:
+               wiping: bool = False, rejecting: str = "", code: str = "") -> str:
     """A small company's own form: nothing this tool has seen before."""
+    posting = ""
+    if code:
+        # A long posting above the form, as on Greenhouse, so what the site says after Submit is far down the page.
+        posting = "<p>" + "We build small robots that tidy workshops, and we are hiring interns. " * 130 + "</p>"
     essay = ('<div class="form-group"><label for="why">Why do you want to work here? *</label>'
              '<textarea id="why" name="why" required></textarea></div>') if required_essay else ""
     if quiz:
@@ -407,9 +469,34 @@ form.addEventListener('submit', function (event) {
   form.prepend(box);
 });
 </script>""" % (rejecting, rejecting, rejecting)
+    if code:
+        # Like Greenhouse when it wants proof of the email address: Submit brings up boxes for a code it
+        # emailed. "typed" has the student type it in after a few seconds; "never" has nobody come.
+        check = """
+<script>
+var form = document.querySelector('form[method="post"]');
+form.addEventListener('submit', function (event) {
+  if (window.codeGiven) return;
+  event.preventDefault();
+  if (document.getElementById('security-input-0')) return;
+  var panel = document.createElement('div');
+  panel.id = 'email-verification';
+  panel.innerHTML = '<p>A verification code was sent to ' + document.getElementById('em').value
+    + '. Enter the 8-character code to submit your application.</p>'
+    + '<input id="security-input-0" maxlength="8" aria-label="Security code">';
+  form.appendChild(panel);
+  var button = form.querySelector('button[type="submit"]');
+  button.disabled = true;  // greyed out until the code is in, as on Greenhouse
+  if ('%s' === 'typed') setTimeout(function () {
+    document.getElementById('security-input-0').value = 'AB12CD34';
+    window.codeGiven = true;
+    button.disabled = false;
+  }, 3500);
+});
+</script>""" % code
     return f"""<!doctype html><html><head><title>Careers - Tiny Robotics</title>{STYLE}</head><body>
 <header><form role="search"><input type="search" name="q" placeholder="Search jobs"></form></header>
-<h1>Robotics Intern</h1>
+<h1>Robotics Intern</h1>{posting}
 <form method="post" action="{action}" enctype="multipart/form-data">
 <div class="form-group"><label for="fn">First name *</label><input id="fn" name="first" required></div>
 <div class="form-group"><label for="ln">Last name *</label><input id="ln" name="last" required></div>
@@ -475,8 +562,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(plain_page("/refusing/apply", rejecting="always"))
         elif path == "/guarded/apply":
             self._send(plain_page("/guarded/apply", captcha=True))
+        elif path == "/coded/apply":
+            self._send(plain_page("/coded/apply", code="typed"))
+        elif path == "/uncoded/apply":
+            self._send(plain_page("/uncoded/apply", code="never"))
         elif path in ("/plain/done", "/essay/done", "/guarded/done", "/quiz/done", "/wiping/done", "/rejecting/done",
-                      "/refusing/done"):
+                      "/refusing/done", "/coded/done"):
             self._send("<html><body><p>Thanks for applying! We received your application.</p></body></html>")
         elif path == "/embedded":
             self._send("<html><body><h1>Careers at Acme</h1><iframe src='/gh/acme/jobs/1' style='width:900px;height:1400px'></iframe></body></html>")
@@ -504,6 +595,22 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path.rstrip("/")
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         content_type = self.headers.get("Content-Type", "")
+        if path == "/ashby/api":
+            # Each save reads the form's stored answers, takes a moment, and writes them back with its
+            # own: two saves at once lose one of the answers, as on the real site.
+            data = json.loads(body or b"{}")
+            held = dict(ASHBY_FORMS.get(data["form"], {}))
+            time.sleep(0.25)
+            held[data["path"]] = data["value"]
+            ASHBY_FORMS[data["form"]] = held
+            self._send("{}")
+            return
+        if path == "/ashby/submit" and "form=" in self.path:
+            held = ASHBY_FORMS.get(self.path.split("form=", 1)[1], {})
+            missing = [label for name, label in ASHBY_REQUIRED.items() if not str(held.get(name, "")).strip()]
+            if missing:
+                self._send(json.dumps({"missing": missing}))
+                return
         if content_type.startswith("application/json"):
             data = json.loads(body or b"{}")
             SUBMISSIONS.append({"path": path, "fields": {k: [str(v)] for k, v in data.items() if not k.startswith("__")},
