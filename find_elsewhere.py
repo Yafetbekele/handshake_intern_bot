@@ -31,6 +31,7 @@ import urllib.request
 from datetime import date, datetime
 from html import escape
 from pathlib import Path
+from urllib.parse import quote
 
 import applied_myself
 import deep_rank
@@ -118,7 +119,7 @@ def from_lever(company: dict) -> list[dict]:
 
 def from_ashby(company: dict) -> list[dict]:
     board = company["board"]
-    listed = get_json(f"https://api.ashbyhq.com/posting-api/job-board/{board}?includeCompensation=true").get("jobs", [])
+    listed = get_json(f"https://api.ashbyhq.com/posting-api/job-board/{quote(board)}?includeCompensation=true").get("jobs", [])
     found = []
     for job in listed:
         title = job.get("title", "")

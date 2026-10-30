@@ -500,7 +500,7 @@ def ai_plan(
 
 
 def ask_claude_json(
-    prompt: str, system_prompt: str, exe: str | None = None, timeout: int = 300
+    prompt: str, system_prompt: str, exe: str | None = None, timeout: int = 300, model: str | None = None
 ) -> tuple[dict[str, Any] | None, str]:
     """One tool-less Claude Code call on the student's plan that answers with JSON."""
     exe = exe or find_claude()
@@ -513,7 +513,7 @@ def ask_claude_json(
         "--no-session-persistence",
         "--strict-mcp-config",
         "--system-prompt", system_prompt,
-    ]
+    ] + (["--model", model] if model else [])
     try:
         done = subprocess.run(
             command,

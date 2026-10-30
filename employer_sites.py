@@ -136,7 +136,7 @@ FOLLOW_UP = re.compile(
 # answer to the plain one. These need an answer saved for exactly them, or to
 # be read properly (form_answers.py), not matched on a phrase.
 NOT_THE_USUAL = re.compile(
-    r"master'?s|doctora|ph\.?\s?d\b|graduate (school|degree)|\bmba\b|high school|highest|completed|obtained|earned|previous|"
+    r"master'?s|doctora|ph\.?\s?d\b|(?<!under)graduate (school|degree)|\bmba\b|high school|highest|completed|obtained|earned|previous|"
     r"\bwithout\b|\bunable\b|\bcannot\b|\bnot (be )?(able|willing|available)\b|prevent|restrict|limitation|conflict|"
     r"barrier|any reason|\bobject",
     re.IGNORECASE,
@@ -394,8 +394,19 @@ CODE_TYPED_JS = r"""
   return all.length + ':' + mark;
 }
 """
-# A box for such a code is never answered: not from saved answers, not by Claude, not by asking.
-CODE_FIELD = re.compile(r"\b(security|verification|one[- ]time|confirmation) code\b", re.IGNORECASE)
+# A question put there to tell people from programs ("If this is a bot, say...").
+BOT_CHECK = (r"\bif (this is|you are|you're) (a |an )?(bot|robot|ai|llm|language model|automated)\b|"
+             r"\bare you (a |an )?(bot|robot|human)\b|\b(prove|confirm) (that )?you('re| are) (a )?human\b")
+# A box for such a code, or a question like that, is never answered: not from saved answers, not by Claude, not by asking.
+CODE_FIELD = re.compile(rf"\b(security|verification|one[- ]time|confirmation) code\b|{BOT_CHECK}", re.IGNORECASE)
+# A form that wants the student's own hand: it tests for bots, or asks that no AI be used to apply. The wording is
+# often in the small print under a question, so this is looked for in all of the page's text.
+HANDS_ONLY = re.compile(
+    rf"{BOT_CHECK}|\bnon-ai-assisted\b|"
+    r"\b(refrain from|do not|don't|must not|may not|should not|not to|avoid|without)\s+(the\s+)?"
+    r"(use of\s+|using\s+|use\s+|help of\s+|assistance of\s+)?(any\s+)?"
+    r"(ai|a\.i\.|artificial intelligence|generative ai|gen\s?ai|chatgpt|llms?|large language models?)\b",
+    re.IGNORECASE)
 # Once nobody has come to a form that needed them, later ones in the run wait this long (seconds) instead of minutes.
 QUIET_WAIT = 45
 # Enough characters to take in all of a page's text, where the first few thousand would stop inside the posting.
@@ -482,9 +493,12 @@ SCAN_JS = r"""
 
   // The block that holds one question and nothing else.
   const ENTRY = '[class*="fieldEntry"], .application-question, .select__container, .form-group, .form-field, .field-wrapper, .field';
+  // Ashby names each checkbox after its choice, so only this holds a list of them together.
+  const CHECK_LIST = '.ashby-application-form-input-checkbox-group';
   const entryOf = el => {
     const e = el.closest(ENTRY);
     if (!e || e === root || e.contains(root)) return null;
+    if (e.matches(CHECK_LIST)) return e;
     const groups = new Set();
     for (const c of e.querySelectorAll('input, textarea, select')) if (real(c)) groups.add(c.getAttribute('name') || c.id || c);
     return groups.size <= 1 ? e : null;
@@ -581,7 +595,9 @@ SCAN_JS = r"""
 
     if (type === 'radio' || type === 'checkbox') {
       const group = el.getAttribute('name');
-      let members = group ? [...root.querySelectorAll('input[type="' + type + '"]')].filter(m => m.getAttribute('name') === group) : [el];
+      const list = type === 'checkbox' ? el.closest(CHECK_LIST) : null;
+      let members = list ? [...list.querySelectorAll('input[type="checkbox"]')]
+        : group ? [...root.querySelectorAll('input[type="' + type + '"]')].filter(m => m.getAttribute('name') === group) : [el];
       members.forEach(m => used.add(m));
       members = members.filter(m => !m.disabled && (shown(m) || shown(m.closest('label')) || shown(labelFor(m))));
       if (!members.length) continue;
@@ -745,7 +761,7 @@ class EmployerSite:
         self.page.on("requestfinished", ended)
         self.page.on("requestfailed", ended)
 
-    def _settle(self) -> None:
+    def _let_save(self) -> None:
         """Wait for the site to finish saving the answer just given, before the next one is."""
         if self.flavor not in SAVES:
             return
@@ -988,6 +1004,10 @@ class EmployerSite:
                 missing.append(label[:90])
         return missing
 
+    def hands_only(self) -> bool:
+        """Whether the form says only the student themselves should fill it in (HANDS_ONLY)."""
+        return any(HANDS_ONLY.search(self._text(frame, WHOLE_PAGE)) for frame in self._frames())
+
     def takes(self, kind: str) -> bool:
         """Whether the form has a place to attach this document ("resume", "cover_letter", "transcript")."""
         return any(item["kind"] == "file" and document_kind(item["label"], item.get("hint", "")) == kind
@@ -1078,7 +1098,7 @@ class EmployerSite:
             self.say(f"  [note] couldn't fill in \"{item['label'][:60]}\" ({type(exc).__name__})")
             return False
         if len(report.filled) > before:
-            self._settle()  # where the site saves answers one by one, this one lands before the next
+            self._let_save()  # where the site saves answers one by one, this one lands before the next
         if answered and item["empty"]:
             self._given.add(self._key(item))
         return answered
@@ -1112,7 +1132,7 @@ class EmployerSite:
         self.attached.add(kind)
         report.attached.add(kind)
         report.filled.append(f"{kind.replace('_', ' ')}: {Path(path).name}")
-        self._settle()
+        self._let_save()
 
     def _after_upload(self) -> None:
         """Give the site a moment to take the file in (and read it, if it does that)."""
@@ -1194,10 +1214,23 @@ class EmployerSite:
             control.scroll_into_view_if_needed()
             control.click()
             _, texts = self._open_options()
+            if not texts and self.flavor == "ashby":
+                texts = self._options_by_typing(control)
             self.page.keyboard.press("Escape")
         except Exception:
             return []
         return texts if 0 < len(texts) <= 150 else []
+
+    def _options_by_typing(self, control: Any) -> list[str]:
+        """Ashby's lists stay shut until something is typed, then match loosely: a few letters turn up a short list."""
+        found: list[str] = []
+        for letter in "aeiou":
+            control.fill("")
+            control.press_sequentially(letter, delay=15)
+            _, texts = self._open_options(900)
+            found += [t for t in texts if t not in found]
+        control.fill("")
+        return found
 
     def _answer(self, item: dict[str, Any], report: FormReport, overwrite: bool, ask: bool = False) -> bool:
         label, kind = item["label"], item["kind"]
@@ -1243,6 +1276,11 @@ class EmployerSite:
             value = str(saved[0]["value"]) if saved and overwrite else None
             if not value or _loose(value) == _loose(item.get("value", "")):
                 return True
+        if item.get("type") == "number" and not re.fullmatch(r"\d+(\.\d+)?", value.strip()):
+            # "N/A" can't go in a box that takes only digits; a saved answer can say what to give instead.
+            value = next((str(a["number"]) for a in saved if a.get("number") is not None), "")
+            if not value:
+                return False
         if self.flavor == "lever" and "location-input" in item.get("hint", ""):
             # Lever's location box keeps only a place picked from its own suggestions.
             picked = self._pick_place(item, value)
@@ -1351,6 +1389,7 @@ class EmployerSite:
         picked = self._choose(item, ask, want_many=True)
         for index in picked:
             self._tick(self._option(item, index))
+            self._let_save()
         if picked:
             report.filled.append(f"{item['label'][:60]}: " + "; ".join(item["options"][i][:40] for i in picked))
         return bool(picked)

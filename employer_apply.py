@@ -26,6 +26,7 @@ import csv
 import hashlib
 import json
 import random
+import re
 import sys
 import textwrap
 import time
@@ -86,13 +87,33 @@ SAYS = {
 }
 
 
+# How many forms in a row --keep-going tries on a kind of site that keeps wanting a person there.
+KEEP_GOING_PATIENCE = 25
+
 # Why an automatic run leaves a form it could open. Neither changes from one run to the next.
 UNFAMILIAR = "a kind of form this tool hasn't seen before; run without --auto-submit to check it yourself"
 NO_RESUME_SLOT = "found nowhere on the form to attach your resume"
+OWN_HAND = "this form checks for bots or asks that no AI be used, so only you should fill it in"
+
+# Roles nothing in the student's background fits. An automatic run leaves them; a run they're at still offers them.
+OFF_FIELD = re.compile(
+    r"\b(legal|compliance|paralegal|counsel|sales|sdr|bdr|business development|account (executive|manager)|marketing|"
+    r"recruit\w*|talent|human resources|hr|people (ops|operations)|finance|financial|accounting|audit\w*|tax|treasury|"
+    r"investment|customer (success|support)|content|copywrit\w*|communications|public relations|graphic|ux|"
+    r"product (design|manager|management)|civil|chemical|biolog\w*|clinical|nursing)\b",
+    re.IGNORECASE,
+)
+ON_FIELD = re.compile(r"\b(software|hardware|firmware|embedded|electrical|electronics?|computer|robotics|fpga|asic|rtl|"
+                      r"developer|programmer)\b", re.IGNORECASE)
 
 SEND = "  Send this application? [y]es / [n]o, never / [l]ater / [q]uit: "
 SEND_STUCK = ("  Send this application? [y]es / [a]lready went through, I have its confirmation email / "
               "[n]o, never / [l]ater / [q]uit: ")
+
+
+def off_field(title: str) -> bool:
+    """Whether a role is plainly outside the student's field."""
+    return bool(OFF_FIELD.search(title)) and not ON_FIELD.search(title)
 
 
 def waiting_on_you(entry: dict[str, Any]) -> bool:
@@ -113,7 +134,8 @@ class BackOff:
     instead of filling in form after form that gets no further.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, patience: int = 2) -> None:
+        self.patience = patience  # forms held up in a row before the rest of that kind of site are left
         self.run: dict[str, list[str]] = {}  # per kind of site, what held up each form since the last one it took
 
     def saw(self, kind: str, status: str, stuck: str) -> None:
@@ -127,11 +149,11 @@ class BackOff:
     def reason(self, kind: str) -> str:
         """Why this kind of site is left alone for the rest of the run, or "" when it isn't."""
         seen = self.run.get(kind, [])
-        if len(seen) >= 2 and all(s in ("code", "check") for s in seen[-2:]):
+        if len(seen) >= self.patience and all(s in ("code", "check") for s in seen[-self.patience:]):
             return ("is asking for a code it emails you" if seen[-1] == "code" else "is showing a security check") \
                 + " on each application"
-        if len(seen) >= 3:
-            return "hasn't confirmed the last 3 applications"
+        if len(seen) > self.patience:
+            return f"hasn't confirmed the last {self.patience + 1} applications"
         return ""
 
 
@@ -708,6 +730,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="fill forms in but never send one")
     parser.add_argument("--auto-submit", action="store_true", help="send complete forms without asking each time")
     parser.add_argument("--links-only", action="store_true", help="only look up where each posting applies")
+    parser.add_argument("--keep-going", action="store_true",
+                        help=f"try up to {KEEP_GOING_PATIENCE} forms in a row on a kind of site that keeps wanting a person there, "
+                             "not 2 (some let applications through; uses more of your Claude plan)")
     parser.add_argument("--questions", action="store_true",
                         help="show the questions it couldn't answer so far, most common first, and answer them")
     parser.add_argument("--retry", action="store_true", help="include postings settled on earlier runs")
@@ -770,6 +795,8 @@ def main(argv: list[str] | None = None) -> int:
         status = record.status(posting["id"])
         if posting["id"] in done or status == "applied" or listing.is_removed(posting["id"]):
             continue
+        if auto and off_field(posting["title"]):
+            continue
         if args.stuck:
             if not waiting_on_you(record.entries.get(posting["id"], {})):
                 continue
@@ -777,13 +804,17 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if status == "needs_manual" and auto and not args.retry:
             left = str(record.entries[posting["id"]].get("note", ""))
+            if waiting_on_you(record.entries[posting["id"]]):  # opening it again only gets another code emailed
+                continue
             # A form left for want of an answer is only worth opening again once there are new answers,
             if left.startswith("still empty") and record.entries[posting["id"]].get("answers") == len(answers):
                 continue
             # and one an automatic run never sends isn't worth opening again at all.
-            if left.startswith((UNFAMILIAR[:20], NO_RESUME_SLOT[:20])):
+            if left.startswith((UNFAMILIAR[:20], NO_RESUME_SLOT[:20], OWN_HAND[:20])):
                 continue
         postings.append(posting)
+    if auto:  # What usually goes through comes first, in case Claude's limit ends the run early. Otherwise best fit first.
+        postings.sort(key=lambda p: site_kind(p["url"] if p["source"] == "elsewhere" else links.get(p["id"]) or "")[0] != "ashby")
     if not postings and args.stuck:
         print("No form on that list is waiting on you: none got stuck after Submit.")
         return 0
@@ -851,7 +882,7 @@ def main(argv: list[str] | None = None) -> int:
     low, high = (list(config.get("delay_between_employer_applications_seconds", [8, 20])) + [20])[:2]
     counts: dict[str, int] = {}
     kinds: dict[str, int] = {}
-    backing_off = BackOff()
+    backing_off = BackOff(KEEP_GOING_PATIENCE if args.keep_going else 2)
     handled = 0
     signed_in: bool | None = None
 
@@ -870,9 +901,9 @@ def main(argv: list[str] | None = None) -> int:
                 if not link:
                     if signed_in is None:
                         signed_in = session.ensure_logged_in()
-                    if not signed_in:
-                        print("  Not signed in to Handshake, so its postings can't be looked up this run.")
-                        break
+                    if not signed_in:  # the rest of the list, the ones whose links are known, still go ahead
+                        print("  -> skipped: not signed in to Handshake, so where it applies can't be looked up this run")
+                        continue
                     try:
                         link, why = session.external_apply_url(posting["id"])
                     except Exception as exc:
@@ -922,8 +953,13 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 site_name = note
                 # An automatic run never sends these two, so nothing is tailored or written for them.
+                own_hand = site.hands_only()
+                if own_hand and not auto:
+                    print(f"  [!] {OWN_HAND}. Read and rewrite whatever is filled in below before sending.")
                 cannot = ""
-                if auto and site.flavor not in FORM_SITES:
+                if auto and own_hand:
+                    cannot = OWN_HAND
+                elif auto and site.flavor not in FORM_SITES:
                     cannot = UNFAMILIAR
                 elif auto and not site.takes("resume"):
                     cannot = NO_RESUME_SLOT

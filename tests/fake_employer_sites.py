@@ -293,6 +293,9 @@ ASHBY_REQUIRED = {
     "f-linkedin": "LinkedIn Profile", "f-degree": "Degree Level Currently Pursuing",
     "f-auth": "Are you legally authorized to work in the United States?",
     "f-family": "Are you related to any current Acme employees?",
+    "f-pay": "What are your salary requirements",
+    "f-terms": "Which term(s) are you interested in? Select all that apply.",
+    "f-certify": "My details above are correct", "f-privacy": "I understand how my application is processed",
 }
 
 
@@ -319,6 +322,15 @@ def ashby_radio(field_id: str, label: str, choices: list[str], required: bool = 
             f'<label class="_heading_f7cvd_52{" _required_f7cvd_91" if required else ""} _label_1e3gg_42 ashby-application-form-question-title" for="{field_id}">{label}&nbsp;</label>{options}</fieldset>')
 
 
+def ashby_checks(field_id: str, label: str, choices: list[str], required: bool = True) -> str:
+    """A list of checkboxes. Like Ashby's, each is named after its choice, so two lists can have boxes of the same name."""
+    options = "".join(
+        f'<div class="_option_1258i_34 ashby-application-form-input-checkbox-group-option"><span><input type="checkbox" id="{field_id}-labeled-checkbox-{n}" name="{html.escape(c, quote=True)}"></span>'
+        f'<label for="{field_id}-labeled-checkbox-{n}" class="_label_1258i_42">{c}</label></div>' for n, c in enumerate(choices))
+    return (f'<fieldset class="_container_1258i_28 _fieldEntry_1e3gg_28 ashby-application-form-input-checkbox-group" data-field-path="{field_id}">'
+            f'<label class="_heading_f7cvd_52{" _required_f7cvd_91" if required else ""} _label_1e3gg_42 ashby-application-form-question-title" for="{field_id}">{label}&nbsp;</label>{options}</fieldset>')
+
+
 def ashby_page(action: str) -> str:
     def text(field_id: str, label: str, required: bool = False, kind: str = "text") -> str:
         need = ' required=""' if required else ""
@@ -335,6 +347,10 @@ def ashby_page(action: str) -> str:
 {ashby_radio("f-degree", "Degree Level Currently Pursuing", ["Associate's", "Bachelor's", "Master's"])}
 {ashby_yes_no("f-auth", "Are you legally authorized to work in the United States?")}
 {ashby_yes_no("f-family", "Are you related to any current Acme employees?")}
+{text("f-pay", "What are your salary requirements", True, "number")}
+{ashby_checks("f-terms", "Which term(s) are you interested in? Select all that apply.", ["Fall 2026", "Summer 2027"])}
+{ashby_checks("f-certify", "My details above are correct", ["Yes"])}
+{ashby_checks("f-privacy", "I understand how my application is processed", ["Yes"])}
 {ashby_entry("f-why", "Why do you want to work at Acme?", '<textarea id="f-why" name="f-why" placeholder="Type here..."></textarea>')}
 </div>
 <div class="_section_101oc_37 ashby-application-form-section-container"><h2>Equal opportunity questions</h2>
@@ -352,7 +368,7 @@ function save(path, value) {{
   fetch('/ashby/api?op=ApiSetFormValue', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
     body: JSON.stringify({{ form: formId, path: path, value: value }}) }});
 }}
-document.querySelectorAll('#form input[type="text"], #form input[type="email"], #form textarea').forEach(function (el) {{
+document.querySelectorAll('#form input[type="text"], #form input[type="number"], #form input[type="email"], #form textarea').forEach(function (el) {{
   el.addEventListener('input', function () {{ save(el.name, el.value); }});
 }});
 document.querySelectorAll('#form input[type="radio"]').forEach(function (el) {{
@@ -364,9 +380,20 @@ document.querySelectorAll('.ashby-application-form-input-yesno button').forEach(
     save(b.parentElement.querySelector('input').name, b.getAttribute('data-option'));
   }});
 }});
+function ticked(box) {{
+  return Array.prototype.map.call(box.querySelectorAll('input:checked'), function (x) {{ return x.name; }}).join(',');
+}}
+document.querySelectorAll('.ashby-application-form-input-checkbox-group').forEach(function (box) {{
+  box.querySelectorAll('input').forEach(function (el) {{
+    el.addEventListener('change', function () {{ save(box.getAttribute('data-field-path'), ticked(box)); }});
+  }});
+}});
 document.getElementById('send').addEventListener('click', function () {{
   var data = {{}}, missing = [];
-  document.querySelectorAll('#form input[type="text"], #form input[type="email"], #form textarea').forEach(function (el) {{
+  document.querySelectorAll('.ashby-application-form-input-checkbox-group').forEach(function (box) {{
+    data[box.getAttribute('data-field-path')] = ticked(box);
+  }});
+  document.querySelectorAll('#form input[type="text"], #form input[type="number"], #form input[type="email"], #form textarea').forEach(function (el) {{
     data[el.name] = el.value;
     if (el.required && !el.value.trim()) missing.push(el.name);
   }});

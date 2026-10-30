@@ -27,7 +27,7 @@ import urllib.request
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import tailor
 
@@ -230,14 +230,41 @@ def save_discovered(boards: dict[str, dict[str, str]]) -> None:
     path.write_text(json.dumps(boards, indent=1, sort_keys=True), encoding="utf-8")
 
 
+# Some boards are titled for the page ("Join Our Talent Community"), not for the company.
+PAGE_LABEL = re.compile(r"\b(talent|website|careers?|jobs|campus|programs?|internships?|university|hiring)\b|:", re.IGNORECASE)
+
+
+def board_name(ats: str, board: str) -> str:
+    """What the company calls itself on its board, since letters and essays name it. Falls back on the board's address."""
+    fallback = board.replace("-", " ").title()
+    try:
+        if ats == "greenhouse":
+            url, body = f"https://boards-api.greenhouse.io/v1/boards/{quote(board)}", None
+        elif ats == "ashby":
+            query = ("query Name($name: String!) { organization: organizationFromHostedJobsPageName("
+                     "organizationHostedJobsPageName: $name) { name } }")
+            url = "https://jobs.ashbyhq.com/api/non-user-graphql?op=Name"
+            body = json.dumps({"operationName": "Name", "variables": {"name": board}, "query": query}).encode()
+        else:
+            return fallback
+        request = urllib.request.Request(url, body, {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=15) as response:
+            answer = json.loads(response.read())
+        named = ((answer.get("data") or {}).get("organization") or {}) if ats == "ashby" else answer
+        name = (named.get("name") or "").strip()
+        return fallback if not name or PAGE_LABEL.search(name) else name
+    except (OSError, ValueError, AttributeError):
+        return fallback
+
+
 def add_boards(found: set[tuple[str, str]], known: set[tuple[str, str]], source: str, day: date) -> int:
     boards = load_discovered()
     added = 0
     for ats, board in found:
         key = f"{ats}:{board.lower()}"
-        if (ats, board.lower()) in known or key in boards:
-            continue
-        boards[key] = {"ats": ats, "board": board, "name": board.replace("-", " ").title(),
+        if (ats, board.lower()) in known or key in boards or re.fullmatch(r"[0-9a-f-]{36}", board.lower()):
+            continue  # (a board addressed by a code doesn't say whose it is, and a letter has to)
+        boards[key] = {"ats": ats, "board": board, "name": board_name(ats, board),
                        "source": source, "added": day.isoformat()}
         added += 1
     if added:
