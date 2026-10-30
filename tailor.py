@@ -213,6 +213,8 @@ def find_claude() -> str | None:
     # the usual path.
     homes = [os.path.join(appdata, "Claude", "claude-code")]
     homes += glob.glob(os.path.join(local, "Packages", "Claude_*", "LocalCache", "Roaming", "Claude", "claude-code"))
+    # Since the app's late-October 2026 update its files are in Local\Claude-Data\claude_<id>.
+    homes += glob.glob(os.path.join(local, "Claude-Data", "*", "claude-code"))
     candidates = []
     for home in homes:
         # <version>\claude.exe, or since late 2026 <version>\<build>\claude.exe.
