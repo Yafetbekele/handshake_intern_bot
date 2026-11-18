@@ -147,7 +147,7 @@ class ManualList:
     `limit` are kept.
     """
 
-    def __init__(self, folder: str | Path, limit: int = 100) -> None:
+    def __init__(self, folder: str | Path, limit: int = 250) -> None:
         self.folder = Path(folder)
         self.limit = limit
         self.json_path = self.folder / "list.json"
@@ -180,7 +180,9 @@ class ManualList:
         resume_path: str = "",
         fit: float | None = None,
         why: list[str] | None = None,
+        checks: list[str] | None = None,
     ) -> None:
+        """checks: keywords the resume adds that the profile doesn't back (shown beside it)."""
         if job_id in self._removed:
             return
         now = datetime.now().isoformat(timespec="seconds")
@@ -194,6 +196,8 @@ class ManualList:
             "score": round(max(float(score), float(existing.get("score", 0))), 4),
             "reason": reason,
             "resume": resume_path or existing.get("resume", ""),
+            # A new resume brings its own checks; with no new resume, the old ones stay.
+            "resume_check": list(checks) if checks is not None else ([] if resume_path else existing.get("resume_check", [])),
             "fit": float(fit) if fit is not None else existing.get("fit"),
             "why": list(why) if why is not None else existing.get("why", []),
             "first_seen": existing.get("first_seen", now),
@@ -274,12 +278,14 @@ class ManualList:
         if self._removed or self.removed_path.exists():
             self.removed_path.write_text(json.dumps(self._removed, indent=2, sort_keys=True), encoding="utf-8")
 
-        fields = ["fit", "score_percent", "title", "employer", "location", "reason", "why", "url", "resume", "first_seen", "last_seen"]
+        fields = ["fit", "score_percent", "title", "employer", "location", "reason", "why", "url", "resume",
+                  "resume_check", "first_seen", "last_seen"]
         with self.csv_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             for row in rows:
-                writer.writerow(dict(row, score_percent=round(float(row.get("score", 0)) * 100), why="; ".join(row.get("why") or [])))
+                writer.writerow(dict(row, score_percent=round(float(row.get("score", 0)) * 100), why="; ".join(row.get("why") or []),
+                                     resume_check=", ".join(row.get("resume_check") or [])))
 
         self.html_path.write_text(self.page_html(), encoding="utf-8")
         return self.html_path
@@ -288,7 +294,7 @@ class ManualList:
 def _manual_list_html(
     rows: list[dict[str, Any]],
     folder: Path,
-    limit: int = 100,
+    limit: int = 250,
     removed: list[dict[str, Any]] | None = None,
     served: bool = False,
 ) -> str:
@@ -311,7 +317,12 @@ def _manual_list_html(
                 link = os.path.relpath(resume, folder).replace(os.sep, "/")
             except ValueError:  # on a different drive
                 link = Path(resume).resolve().as_uri()
-        return f"<a href='{escape(link, quote=True)}'>Open</a>"
+        checks = [str(c) for c in (row.get("resume_check") or [])]
+        if not checks:
+            return f"<a href='{escape(link, quote=True)}'>Open</a>"
+        return (f"<a href='{escape(link, quote=True)}'>Open</a><div class='check' title='Added from the posting; "
+                f"your profile doesn&#39;t back these. Check them before you send it.'>check: "
+                f"{escape(', '.join(checks))}</div>")
 
     body = []
     tagged = [(row, False) for row in rows] + [(row, True) for row in (removed or [])]
@@ -333,7 +344,9 @@ def _manual_list_html(
             f"<td>{escape(str(row.get('reason', '')))}</td>"
             f"<td>{resume_link(row)}</td>"
             f"<td class='when'>{escape(str(row.get('first_seen', ''))[:10])}</td>"
-            "<td class='act'><button type='button' class='remove'>Remove</button></td>"
+            "<td class='act'><button type='button' class='mark' title='Saves that you applied, so the program "
+            "counts it and never applies there again'>Applied</button> "
+            "<button type='button' class='remove'>Remove</button></td>"
             "</tr>"
         )
     table = "\n".join(body) or "<tr><td colspan='9'>Nothing here yet.</td></tr>"
@@ -364,6 +377,7 @@ def _manual_list_html(
   .num {{ font-variant-numeric:tabular-nums; white-space:nowrap; }}
   .fit {{ font-weight:700; }}
   .why {{ color:var(--muted); font-size:13px; margin-top:2px; }}
+  .check {{ font-size:12px; margin-top:3px; padding:2px 6px; border-radius:5px; background:var(--warn); color:var(--fg); max-width:220px; }}
   .when {{ color:var(--muted); white-space:nowrap; }}
   .act {{ white-space:nowrap; }}
   button {{ font:inherit; font-size:13px; color:var(--fg); background:var(--soft); border:1px solid var(--line); border-radius:6px; padding:4px 10px; cursor:pointer; }}
@@ -376,7 +390,7 @@ def _manual_list_html(
 <body><main>
 {nav}
 <h1>Internships to apply to yourself</h1>
-<p>{len(rows)} good matches the assistant could not apply to for you, best fit first (at most {limit}). Fit is out of 100: the major match, overlap with your resume, how open it is to undergraduates, and the title. Each link opens the posting on Handshake.</p>
+<p>{len(rows)} good matches the assistant could not apply to for you, best fit first (at most {limit}). Fit is out of 100: the major match, overlap with your resume, how open it is to undergraduates, and the title. Each link opens the posting, on Handshake or the company's own site. Press Applied once you've sent one, so the program counts it toward the most per company and never applies there again.</p>
 <p class="note" id="note" hidden></p>
 <div class="bar">
   <span id="count"></span>
@@ -420,6 +434,7 @@ def _manual_list_html(
       var gone = isRemoved(row);
       row.classList.toggle('removed', gone);
       row.querySelector('button.remove').textContent = gone ? 'Restore' : 'Remove';
+      row.querySelector('button.mark').hidden = gone;
       if (gone) hidden++;
     }});
     count.textContent = (rows.length - hidden) + ' shown' + (hidden ? ', ' + hidden + ' removed' : '');
@@ -429,6 +444,29 @@ def _manual_list_html(
   }}
 
   rows.forEach(function (row) {{
+    var mark = row.querySelector('button.mark');
+    mark.addEventListener('click', function () {{
+      if (!SERVED) {{
+        say('To save that you applied, open the list with "Open apply-yourself list.bat" and press Applied there.');
+        return;
+      }}
+      var link = row.querySelector('td a');
+      var cells = row.querySelectorAll('td');
+      mark.disabled = true;
+      fetch('/api/applied', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json', 'X-Hsbot': '1' }},
+        body: JSON.stringify({{ id: row.getAttribute('data-id'), title: link ? link.textContent : '',
+                               employer: cells[3] ? cells[3].textContent : '', url: link ? link.href : '',
+                               page: 'apply-yourself list' }})
+      }}).then(function (r) {{ if (!r.ok) throw new Error(r.status); return r.json(); }}).then(function () {{
+        row.setAttribute('data-removed', '1');
+        say('');
+        render();
+      }}).catch(function () {{
+        say('The list closed after sitting idle. Open it again to mark postings applied.');
+      }}).then(function () {{ mark.disabled = false; }});
+    }});
     var button = row.querySelector('button.remove');
     button.addEventListener('click', function () {{
       var id = row.getAttribute('data-id');
@@ -461,7 +499,7 @@ def _manual_list_html(
   if (SERVED) {{
     setInterval(function () {{ fetch('/api/ping', {{ method: 'POST', headers: {{ 'X-Hsbot': '1' }} }}).catch(function () {{}}); }}, 20000);
   }} else {{
-    say('Remove here only hides a posting in this browser. To remove postings for good, open the list with "Open apply-yourself list.bat".');
+    say('Opened as a file, Remove only hides a posting in this browser and Applied is not saved. To remove postings for good or mark them applied, open the list with "Open apply-yourself list.bat".');
   }}
   render();
 }})();

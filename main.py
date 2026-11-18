@@ -27,6 +27,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import company_cap
 import cover_letter
 import majors
 import matcher
@@ -55,6 +56,9 @@ class ResumeTailor:
     def __init__(self, config: dict[str, Any]) -> None:
         self.enabled = bool(config.get("tailor_resume", False))
         self.use_ai = False
+        # Resumes for the apply-yourself list get the posting's keywords; ones sent for you never do.
+        self.keywords = bool(config.get("add_job_keywords_to_my_resumes", True))
+        self.last_added: list[str] = []
         self.profile_path = Path(str(config.get("profile_path") or tailor.PROFILE_PATH))
         if not self.enabled:
             return
@@ -81,14 +85,16 @@ class ResumeTailor:
         answers = profile.get("application_answers", [])
         return answers if isinstance(answers, list) else []
 
-    def for_job(self, job: Job) -> Path | None:
+    def for_job(self, job: Job, for_list: bool = False) -> Path | None:
+        """for_list: a resume the student sends himself, so the posting's keywords may go in."""
+        self.last_added = []
         if not self.enabled:
             return None
         print("  tailoring your resume for this job...")
         try:
             result = tailor.tailor_resume(
                 job.job_id, job.title, job.employer, job.description,
-                use_ai=self.use_ai, profile_path=self.profile_path,
+                use_ai=self.use_ai, profile_path=self.profile_path, add_keywords=for_list and self.keywords,
             )
         except Exception as exc:  # never let tailoring stop an application run
             print(f"  [warn] tailoring failed ({type(exc).__name__}: {exc}); using your default resume")
@@ -97,6 +103,9 @@ class ResumeTailor:
         print(f"  tailored resume ({how}): {result.path}")
         for note in result.notes[:3]:
             print(f"    {note}")
+        self.last_added = list(result.added)
+        if result.added:
+            print(f"    check before sending: {', '.join(result.added)}")
         return result.path
 
 
@@ -236,9 +245,10 @@ def add_best_to_manual(
     for found, job, result, reason in chosen:
         if tailorer.enabled:
             print(f"\n{job.label()}")
-        resume = tailorer.for_job(job) if tailorer.enabled else None
+        resume = tailorer.for_job(job, for_list=True) if tailorer.enabled else None
         manual.add(job.job_id, job.title, job.employer, job.location, job.url,
-                   result.score, reason, resume_path=str(resume or ""), fit=found.points, why=found.why)
+                   result.score, reason, resume_path=str(resume or ""), fit=found.points, why=found.why,
+                   checks=tailorer.last_added if resume else None)
     left_off = len(scored) - len(chosen)
     if left_off:
         print(f"\n{left_off} weaker matches were left off your list "
@@ -281,6 +291,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "near_location": "",
     "within_miles": 25,
     "tailor_resume": False,
+    # Resumes you send yourself (the apply-yourself list) get the posting's keywords added, even
+    # ones your profile doesn't back, listed in CHECK BEFORE SENDING.txt. Applications sent for you never do.
+    "add_job_keywords_to_my_resumes": True,
     "write_cover_letters": True,
     "answer_questions": True,
     "answer_timeout": 60,
@@ -288,6 +301,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "use_ai_for_tailoring": True,
     "profile_path": "",
     "headless": False,
+    # A form that's filled in and only waiting on a code the site emailed stays open in the
+    # browser after an automatic run, for you to type the code into.
+    # Postings read this recently are reviewed from their saved copy instead of being opened again (0: always open).
+    "reuse_postings_read_within_hours": 24,
+    "leave_code_tabs_open": True,
+    # Once a company's form has asked for a code, its other forms are filled in and left open unsent
+    # (no code is emailed at night). At most this many tabs are left waiting.
+    "most_tabs_left_open": 40,
+    # At most this many applications per company, counted across Handshake, employers' own sites and the
+    # ones you marked yourself (0: no limit).
+    "most_applications_per_company": company_cap.DEFAULT_MOST,
 }
 
 
@@ -375,6 +399,7 @@ def gather_candidates(
     major: majors.MajorProfile,
     ledger: Ledger,
     limit_scan: int,
+    cap: company_cap.CompanyCap | None = None,
 ) -> list[tuple[Job, matcher.MatchResult]]:
     """Search, open each posting, filter it, and return survivors ranked by score."""
     # Postings are scored on the major's fixed preset, never on the resume.
@@ -397,9 +422,16 @@ def gather_candidates(
     def settled(job_id: str) -> bool:
         return ledger.status_of(job_id) in SETTLED_STATUSES
 
+    def company_full(job_id: str) -> bool:
+        """A posting read before, at a company that has had enough applications, isn't worth a search slot."""
+        if cap is None:
+            return False
+        return cap.full(str((posting_cache.load(job_id) or {}).get("employer", "")))
+
     # "Postings to review" is a target: search deeper until it's reached.
     job_ids = session.collect_job_ids(
-        queries, int(config.get("max_search_pages", 4)), want=limit_scan, skip=settled,
+        queries, int(config.get("max_search_pages", 4)), want=limit_scan,
+        skip=lambda job_id: settled(job_id) or company_full(job_id),
         deepest_page=int(config.get("deepest_search_page", 30)),
     )
     print(f"\n{len(job_ids)} unique postings found across {len(queries)} searches.")
@@ -414,6 +446,11 @@ def gather_candidates(
     if len(fresh) != len(job_ids):
         print(f"{len(job_ids) - len(fresh)} already settled in earlier runs "
               "(applied, declined, or apply on the employer's site).")
+    capped = [j for j in fresh if company_full(j)]
+    if capped:
+        print(f"{len(capped)} more are at companies that already have {cap.most} of your applications, "
+              "so they're left for other companies.")
+        fresh = [j for j in fresh if j not in set(capped)]
     if len(fresh) < limit_scan:
         print(f"The searches ran out at {len(fresh)} new postings, short of the {limit_scan} asked for.")
     fresh = fresh[:limit_scan]
@@ -421,10 +458,21 @@ def gather_candidates(
     banner(f"Reviewing {len(fresh)} postings")
     kept: list[tuple[Job, matcher.MatchResult]] = []
 
+    # A posting read within the last day isn't opened again just to review it, so a run that
+    # was cut short gets back to where it stopped quickly. Applying still opens the posting.
+    reuse_hours = float(config.get("reuse_postings_read_within_hours", 24))
+    reused = 0
     for index, job_id in enumerate(fresh, start=1):
-        job = session.load_job(job_id)
-        posting_cache.save(job)  # kept for ranking later
-        prefix = f"[{index}/{len(fresh)}]"
+        saved = posting_cache.recent(job_id, reuse_hours)
+        if saved is not None:
+            job = Job(job_id=job_id, url=saved.get("url") or f"{session.base}/job-search/{job_id}",
+                      title=saved["title"], employer=saved.get("employer", ""), location=saved.get("location", ""),
+                      description=saved.get("description", ""), apply_kind=saved["apply_kind"])
+            reused += 1
+        else:
+            job = session.load_job(job_id)
+            posting_cache.save(job)  # kept for ranking later
+        prefix = f"[{index}/{len(fresh)}]" + (" (read earlier)" if saved is not None else "")
 
         if job.error:
             print(f"{prefix} {job_id}: {job.error}")
@@ -454,6 +502,10 @@ def gather_candidates(
         if job.apply_kind in {"already_applied", "closed"}:
             print(f"{prefix} skip ({job.apply_kind.replace('_', ' ')}): {job.title[:48]}")
             continue
+        if cap is not None and cap.full(job.employer):
+            print(f"{prefix} skip ({cap.count(job.employer)} applications at {job.employer[:30]} already): "
+                  f"{job.title[:40]}")
+            continue
 
         result = matcher.score_posting(job.title, f"{job.employer} {job.location} {job.description}", major)
         if not matcher.passes(result, min_score):
@@ -464,6 +516,8 @@ def gather_candidates(
         print(f"{prefix} {tag} ({result.percent}%): {job.label()[:60]}")
         kept.append((job, result))
 
+    if reused:
+        print(f"\n{reused} of those were read within the last {reuse_hours:g} hours, so their saved copies were used.")
     kept.sort(key=lambda pair: -pair[1].score)
     return kept
 
@@ -639,8 +693,9 @@ def cmd_apply(args: argparse.Namespace) -> int:
         if not session.ensure_logged_in():
             return 1
 
+        cap = company_cap.CompanyCap.from_config(config, DATA_DIR)
         matches = gather_candidates(
-            session, config, profile, major, ledger, int(args.scan)
+            session, config, profile, major, ledger, int(args.scan), cap
         )
         if not matches:
             print("\nNo postings cleared the filters. Nothing to apply to.")
@@ -688,12 +743,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
                 print("Unanswered questions will hold an application back for you to finish.")
             print("Social security numbers and financial details are never filled in.")
 
-        cap = int(config.get("max_applications_per_run", 15))
+        most = int(config.get("max_applications_per_run", 15))
         delay_low, delay_high = (
             list(config.get("delay_between_applications_seconds", [20, 45])) + [45]
         )[:2]
 
-        banner(f"Applying to up to {cap} of {len(kept)} Handshake-hosted matches")
+        banner(f"Applying to up to {most} of {len(kept)} Handshake-hosted matches")
         if followups:
             print(f"{len(followups)} more matches apply on the employer's own site.")
         submitted = 0
@@ -703,9 +758,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
         for position, (job, result) in enumerate(kept):
             is_last = position == len(kept) - 1
-            if submitted >= cap:
-                print(f"\nReached the cap of {cap} applications for this run.")
+            if submitted >= most:
+                print(f"\nReached the cap of {most} applications for this run.")
                 break
+            if cap.full(job.employer):  # filled up earlier in this run
+                print(f"\n  skip ({cap.count(job.employer)} applications at {job.employer} already): {job.title[:50]}")
+                continue
 
             print(f"\n{result.percent}% match  {job.label()}")
             print(f"  {job.url}")
@@ -750,10 +808,12 @@ def cmd_apply(args: argparse.Namespace) -> int:
             elif status == "applied":
                 manual.remove(job.job_id)
 
+            if status in {"applied", "uncertain"}:
+                cap.add(job.employer, job.job_id)
             if status in {"applied", "dry_run", "uncertain"}:
                 submitted += 1
                 # Pace real submissions only, and never after the last one.
-                if not dry_run and not is_last and submitted < cap:
+                if not dry_run and not is_last and submitted < most:
                     pause = random.uniform(float(delay_low), float(delay_high))
                     print(f"  waiting {pause:.0f}s before the next one")
                     time.sleep(pause)

@@ -116,6 +116,16 @@ with tempfile.TemporaryDirectory() as tmp:
         check("resume opens", resume_response.ok and resume_response.body().startswith(b"%PDF"))
         check("other files are not served", page.request.get(url + "list.json").status == 404)
 
+        page.locator("tr[data-id='3'] button.mark").click()
+        page.wait_for_function("document.querySelector(\"tr[data-id='3']\").getAttribute('data-removed') === '1'")
+        check("Applied on the list saves the mark", "3" in applied_myself.ids(), str(applied_myself.ids()))
+        check("and takes it off the list", ManualList(folder).is_removed("3"))
+        check("its row is hidden", page.locator("tr[data-id='3']").is_hidden())
+        applied_myself.unmark("3")  # as it was, for the checks below
+        undo = ManualList(folder)
+        undo.restore("3")
+        undo.save()
+
         plain = browser.new_page()
         plain.goto((folder / "apply_yourself.html").as_uri())
         check("plain file explains Remove only hides", "only hides" in plain.locator("#note").inner_text())

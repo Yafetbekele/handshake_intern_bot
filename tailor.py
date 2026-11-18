@@ -16,6 +16,14 @@ Two ways to build a plan:
 
 Either plan is rendered in the format of the student's original resume: Times,
 bold section headings, dash bullets, one page.
+
+Job keywords (add_keywords=True), for resumes the student sends himself: the
+posting's own tools and skills are added to the skills line, and bullets may
+use the posting's terms, even where the profile doesn't back them. Numbers,
+employers, titles, dates and the never-claim list stay checked as always.
+Every keyword the profile doesn't back is listed in "CHECK BEFORE SENDING.txt"
+beside the resume. These resumes go to their own folder, which the automatic
+appliers never read, so nothing unchecked is ever sent for him.
 """
 
 from __future__ import annotations
@@ -36,11 +44,16 @@ HERE = Path(__file__).resolve().parent
 # Environment overrides exist so tests never touch the real profile or resumes.
 PROFILE_PATH = Path(os.environ.get("HSBOT_PROFILE") or HERE / "profile" / "career_profile.json")
 OUT_DIR = Path(os.environ.get("HSBOT_TAILORED_DIR") or HERE / "tailored_resumes")
+# Resumes with the job's keywords added. Kept apart: the appliers only read OUT_DIR.
+KEYWORD_DIR = Path(os.environ.get("HSBOT_KEYWORD_DIR") or HERE / "tailored_resumes_with_job_keywords")
+CHECK_FILE = "CHECK BEFORE SENDING.txt"
+MAX_ADDED_KEYWORDS = 8
 
 MAX_BULLETS = {"default": 3, "low": 2}
 MAX_SKILLS = 12
 MAX_COURSES = 6
-MAX_BULLET_CHARS = 170
+MAX_BULLET_CHARS = 200  # two full lines of the page
+COURSE_ROWS = 2  # lines the coursework may take under Education
 
 
 @dataclass
@@ -52,6 +65,7 @@ class Plan:
     skills: list[str]
     method: str
     notes: list[str] = field(default_factory=list)
+    added_keywords: list[str] = field(default_factory=list)  # on the page, not backed by the profile
 
 
 @dataclass
@@ -59,6 +73,7 @@ class TailorResult:
     path: Path
     method: str
     notes: list[str]
+    added: list[str] = field(default_factory=list)  # keywords to check before sending
 
 
 # --------------------------------------------------------------------- profile
@@ -88,13 +103,18 @@ def primary_education(profile: dict[str, Any]) -> dict[str, Any]:
     return next((e for e in profile.get("education", []) if "coursework" in e), {})
 
 
+def on_resume(entry: dict[str, Any]) -> bool:
+    """False for what the student keeps off his resume ("on_resume": false). It stays in the profile for forms."""
+    return entry.get("on_resume", True) is not False
+
+
 def earlier_education(profile: dict[str, Any]) -> dict[str, Any]:
     """An earlier school worth a line for its honors, if any."""
-    return next((e for e in profile.get("education", []) if e.get("honors")), {})
+    return next((e for e in profile.get("education", []) if e.get("honors") and on_resume(e)), {})
 
 
 def profile_entries(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {e["id"]: e for s in profile.get("sections", []) for e in s.get("entries", [])}
+    return {e["id"]: e for s in profile.get("sections", []) for e in s.get("entries", []) if on_resume(e)}
 
 
 def _profile_corpus(profile: dict[str, Any]) -> str:
@@ -120,6 +140,147 @@ def _tag_score(tags: list[str], job_norm: str, job_tokens: set[str]) -> float:
         elif tag_norm in job_tokens:
             score += 1.0
     return score
+
+
+# -------------------------------------------------------------- job keywords
+
+# Tools and skills computer engineering postings ask for, written the way a
+# resume lists them, each with the pattern that finds it in a posting.
+JOB_KEYWORDS: list[tuple[str, str]] = [
+    ("SystemVerilog", r"system\s?verilog"), ("UVM", r"\buvm\b"), ("Verilog", r"\bverilog\b"),
+    ("VHDL", r"\bvhdl\b"), ("RTL Design", r"\brtl\b"), ("FPGA", r"\bfpgas?\b"), ("ASIC", r"\basics?\b"),
+    ("SoC", r"system[- ]on[- ](a[- ])?chip|\bsocs?\b(?! analyst)"), ("Static Timing Analysis", r"static timing"),
+    ("Design Verification", r"design verification"), ("Formal Verification", r"formal verification"),
+    ("DFT", r"\bdft\b|design for test"), ("Physical Design", r"physical design"),
+    ("Cadence", r"\bcadence\b"), ("Synopsys", r"\bsynopsys\b"), ("Vivado", r"\bvivado\b"),
+    ("Quartus", r"\bquartus\b"), ("SPICE", r"\b(lt|h|ng)?spice\b"), ("PCB Design", r"\bpcbs?\b|printed circuit"),
+    ("Altium", r"\baltium\b"), ("KiCad", r"\bkicad\b"), ("Oscilloscopes", r"oscilloscope"),
+    ("Logic Analyzers", r"logic analy[sz]er"), ("Signal Integrity", r"signal integrity"),
+    ("Power Electronics", r"power electronics"), ("Analog Circuit Design", r"\banalog (circuit|design)"),
+    ("Mixed-Signal Design", r"mixed[- ]signal"), ("RF", r"\brf\b|radio frequency"),
+    ("DSP", r"\bdsp\b|digital signal processing"), ("Embedded C", r"embedded c\b|\bc/c\+\+|\bc and c\+\+|\bc programming"),
+    ("C++", r"c\+\+"), ("Python", r"\bpython\b"), ("Rust", r"\brust\b"), ("Assembly", r"\bassembly language|\bassembly\b(?! line)"),
+    ("Perl", r"\bperl\b"), ("Tcl", r"\btcl\b"), ("Bash Scripting", r"\bbash\b|shell script"),
+    ("RTOS", r"\brtos\b|real[- ]time operating"), ("FreeRTOS", r"freertos"), ("Zephyr RTOS", r"\bzephyr\b"),
+    ("Embedded Linux", r"embedded linux"), ("Linux Kernel", r"linux kernel|kernel (development|modules?|drivers?)"),
+    ("Device Drivers", r"device drivers?|driver development"), ("Yocto", r"\byocto\b"),
+    ("Firmware Development", r"\bfirmware\b"), ("Bootloaders", r"bootloader"),
+    ("ARM", r"\barm (cortex|processors?|architecture|cores?|based)|cortex-[amr]\d*|\barmv\d"),
+    ("RISC-V", r"risc-?v"), ("x86", r"\bx86\b"),
+    ("Computer Architecture", r"computer architecture|cpu architecture|micro-?architecture"),
+    ("GPU", r"\bgpus?\b"), ("CUDA", r"\bcuda\b"), ("OpenCL", r"\bopencl\b"),
+    ("I2C", r"\bi2c\b"), ("SPI", r"\bspi\b"), ("UART", r"\buart\b"), ("USB", r"\busb\b"),
+    ("PCIe", r"\bpci-?e\b|pci express"), ("Ethernet", r"\bethernet\b"), ("TCP/IP", r"tcp/ip"),
+    ("Bluetooth Low Energy", r"bluetooth|\bble\b"), ("Wi-Fi", r"\bwi-?fi\b|802\.11"),
+    ("CAN Bus", r"\bcan[- ]?bus\b|\bcan (protocol|network)|\bj1939\b"), ("Modbus", r"\bmodbus\b"),
+    ("PLC Programming", r"\bplcs?\b"), ("LabVIEW", r"\blabview\b"), ("MATLAB", r"\bmatlab\b"),
+    ("Simulink", r"\bsimulink\b"), ("Git", r"\bgit\b|github|gitlab"), ("CI/CD", r"\bci/cd\b|continuous integration"),
+    ("Jenkins", r"\bjenkins\b"), ("Docker", r"\bdocker\b"), ("Kubernetes", r"\bkubernetes\b"),
+    ("AWS", r"\baws\b|amazon web services"), ("Azure", r"\bazure\b"), ("SQL", r"\bsql\b"),
+    ("Java", r"\bjava\b(?!script)"), ("JavaScript", r"\bjavascript\b"), ("TypeScript", r"\btypescript\b"),
+    ("React", r"\breact(\.js|js)?\b"), ("REST APIs", r"\brest(ful)? apis?\b|\brestful\b"),
+    ("Machine Learning", r"machine learning"), ("PyTorch", r"\bpytorch\b"), ("TensorFlow", r"\btensorflow\b"),
+    ("Computer Vision", r"computer vision"), ("OpenCV", r"\bopencv\b"), ("ROS", r"\bros ?2?\b"),
+    ("Control Systems", r"control systems|controls engineering|\bpid control"),
+    ("Sensor Integration", r"\bsensors?\b"), ("Unit Testing", r"unit test"),
+    ("Test Automation", r"test automation|automated test"), ("Agile", r"\bagile\b|\bscrum\b"),
+    ("JIRA", r"\bjira\b"), ("Data Structures and Algorithms", r"data structures"),
+    ("Object-Oriented Programming", r"object[- ]oriented"), ("Linux", r"\blinux\b"),
+    ("Networking", r"\bnetworking\b"), ("Cybersecurity", r"cyber ?security"),
+]
+
+
+def _flat(text: str) -> str:
+    """Words only, for comparing terms: normalize() keeps dots, so 'Linux.' would not match 'Linux'."""
+    return " ".join(re.findall(r"[a-z0-9+#]+", normalize(text)))
+
+
+def job_keywords(job_text: str, title: str = "") -> list[str]:
+    """The posting's keywords from JOB_KEYWORDS, most mentioned first (the title counts three times)."""
+    found = []
+    for order, (name, pattern) in enumerate(JOB_KEYWORDS):
+        hits = len(re.findall(pattern, job_text, re.I)) + 3 * len(re.findall(pattern, title, re.I))
+        if hits:
+            first = min((m.start() for m in re.finditer(pattern, f"{title}\n{job_text}", re.I)), default=0)
+            found.append((-hits, first, order, name))
+    return [name for *_, name in sorted(found)]
+
+
+def _profile_facts(profile: dict[str, Any]) -> str:
+    """The profile's own wording (skills, courses, entries), never its tags, as ' word word '."""
+    parts = [s.get("name", "") for s in profile.get("skills", [])]
+    parts += [c.get("name", "") for c in primary_education(profile).get("coursework", [])]
+    parts += [_entry_fact_text(e) for e in profile_entries(profile).values()]
+    return f" {_flat(' '.join(str(p) for p in parts))} "
+
+
+def backed_by_profile(term: str, facts: str) -> bool:
+    words = _flat(term)
+    return bool(words) and f" {words} " in facts
+
+
+def with_job_keywords(plan: Plan, profile: dict[str, Any], job_text: str, title: str,
+                      suggested: list[str] | None = None) -> Plan:
+    """Put the posting's keywords on the skills line, and note the ones the profile doesn't back.
+
+    Skills the profile has that the posting names go first, then the added
+    keywords, then the rest. plan.added_keywords lists everything on the page,
+    skills or bullets, that needs the student's check.
+    """
+    have = {s["name"].lower() for s in profile.get("skills", [])}
+    named = job_keywords(job_text, title)
+    job_norm = f" {_flat(f'{title} {job_text}')} "
+    wanted: list[str] = []
+    for name in list(suggested or []) + named:
+        name = " ".join(str(name).split()).strip(" ,.;:")
+        if not name or len(name) > 40 or name.lower() in have or name.lower() in {w.lower() for w in wanted}:
+            continue
+        # A suggestion has to be the posting's own word; a known keyword was found by its pattern.
+        if name not in named and f" {_flat(name)} " not in job_norm:
+            continue
+        wanted.append(name)
+    wanted = wanted[:MAX_ADDED_KEYWORDS]
+    mentioned = {n.lower() for n in named}
+    first = [s for s in plan.skills if s.lower() in mentioned]
+    rest = [s for s in plan.skills if s.lower() not in mentioned]
+    plan.skills = (first + wanted + rest)[: MAX_SKILLS + 4]
+    facts = _profile_facts(profile)
+    unbacked = [w for w in wanted if w in plan.skills and not backed_by_profile(w, facts)]
+    plan.added_keywords = list(dict.fromkeys(unbacked + list(plan.added_keywords)))
+    if wanted:
+        plan.notes.append(f"added the posting's keywords: {', '.join(wanted)}")
+    return plan
+
+
+def check_list(plan: Plan, title: str, employer: str) -> str:
+    """What CHECK BEFORE SENDING.txt says."""
+    lines = [f"Resume for: {title} at {employer}", ""]
+    if not plan.added_keywords:
+        lines.append("Nothing was added beyond what your profile backs up. It's ready to send.")
+        return "\n".join(lines) + "\n"
+    lines += [
+        "These keywords come from the posting, and your profile doesn't back them.",
+        "Check each one before you send this. Take out anything you can't talk about",
+        "in an interview (edit the PDF, or make the resume again after updating your",
+        "profile in profile/career_profile.json).",
+        "",
+    ]
+    skills = [k for k in plan.added_keywords if k in plan.skills]
+    if skills:
+        lines.append("Added to your skills line:")
+        lines += [f"  - {k}" for k in skills]
+        lines.append("")
+    bullets = []
+    for section in plan.sections:
+        for entry in section["entries"]:
+            for bullet in entry["bullets"]:
+                terms = [k for k in plan.added_keywords if re.search(rf"(?<!\w){re.escape(k)}(?!\w)", bullet, re.I)]
+                if terms:
+                    bullets.append(f'  - "{bullet}"\n      adds: {", ".join(terms)}')
+    if bullets:
+        lines.append("Bullets that use them:")
+        lines += bullets
+    return "\n".join(lines).rstrip() + "\n"
 
 
 # ------------------------------------------------------------------ rule plan
@@ -159,6 +320,8 @@ def rule_plan(profile: dict[str, Any], job_text: str, title: str = "") -> Plan:
     for section in profile.get("sections", []):
         scored_entries = []
         for entry in section.get("entries", []):
+            if not on_resume(entry):
+                continue
             bullets = entry.get("bullets", [])
             ranked = sorted(
                 enumerate(bullets),
@@ -258,8 +421,18 @@ Absolute rules:
 - Keep every date, title, name and figure exactly as the profile states it.
 - Reply with one JSON object only. No commentary, no code fences."""
 
+# For resumes the student checks and sends himself: the posting's keywords may go in.
+KEYWORD_SYSTEM_PROMPT = """You tailor a student's resume to one job posting, working the posting's keywords in so it gets past keyword screening. The student checks every added keyword before sending.
 
-def _ai_prompt(profile: dict[str, Any], job_text: str, title: str, employer: str) -> str:
+Rules:
+- You may add tools, languages and skills the posting asks for, even ones the profile doesn't mention: on the skills line ("added_skills"), and in bullets where they fit what the student actually did.
+- Use only keywords that appear in the job posting. Never invent other tools.
+- What the student did, where, and when stays as the profile states it: never add a number, employer, job title, date, award, result or responsibility that isn't in the profile, and never change one.
+- Each bullet must still be mostly about its own entry's facts, with the posting's keywords worked into it.
+- Reply with one JSON object only. No commentary, no code fences."""
+
+
+def _ai_prompt(profile: dict[str, Any], job_text: str, title: str, employer: str, keywords: bool = False) -> str:
     entries = profile_entries(profile)
     schema = {
         "coursework": [f"up to {MAX_COURSES} exact course names from the profile, most relevant first"],
@@ -273,13 +446,26 @@ def _ai_prompt(profile: dict[str, Any], job_text: str, title: str, employer: str
         "skills": [f"up to {MAX_SKILLS} exact skill names from the profile, most relevant first"],
         "changes": "one sentence on what you emphasized for this job",
     }
+    extra = ""
+    if keywords:
+        schema["added_skills"] = [f"up to {MAX_ADDED_KEYWORDS} tools or skills named in the posting that the "
+                                  "profile's skills lack, written as a resume lists them, most important first"]
+        extra = ("- Work the posting's most important keywords into the bullets where they fit the work described. "
+                 "Every number, name, title and date stays exactly as the profile has it.\n")
+    # Saved form answers are over half the profile and never go on a resume,
+    # so they stay out of the request.
+    resume_facts = {k: v for k, v in profile.items() if k not in ("application_answers", "_answers_note")}
     return (
         f"JOB: {title} at {employer}\n\n"
         f"JOB POSTING:\n{job_text[:7000]}\n\n"
-        f"STUDENT PROFILE (the only allowed source of facts):\n{json.dumps(profile, ensure_ascii=False, indent=1)}\n\n"
+        f"STUDENT PROFILE (the only allowed source of facts):\n{json.dumps(resume_facts, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "TASK: Choose and word the resume content that best fits this job.\n"
+        + extra +
         f"- Always include entries {', '.join(required_entries(profile)) or '(none required)'}. Include the others only if they help.\n"
         f"- At most 3 bullets per entry and about 13 bullets in total, each under {MAX_BULLET_CHARS} characters, starting with a strong verb.\n"
+        "- A line of the page holds about 100 characters. Size each bullet to end on a full line: one line "
+        "(75 to 98 characters) or two (165 to 195). Never leave one to four words alone on a second line.\n"
+        "- No two bullets of an entry may make the same point.\n"
         "- Put the most relevant entries and bullets first within each section.\n"
         f"- Valid entry ids: {', '.join(entries)}.\n\n"
         f"Reply with JSON shaped exactly like:\n{json.dumps(schema, indent=1)}"
@@ -391,12 +577,44 @@ def unsupported_share(bullet: str, entry: dict[str, Any]) -> float:
 MAX_UNSUPPORTED_SHARE = 0.5
 
 
+def _without_job_terms(bullet: str, job_norm: str) -> str:
+    """The bullet with the posting's own terms that hold digits (I2C, x86, Cortex-M4) blanked out,
+    so their digits aren't mistaken for invented numbers."""
+    def blank(match: re.Match[str]) -> str:
+        word = match.group(0)
+        return " " if re.search(r"\d", word) and f" {_flat(word)} " in job_norm else word
+    return re.sub(r"[A-Za-z0-9+#./-]*[A-Za-z][A-Za-z0-9+#./-]*", blank, bullet)
+
+
+def keyword_bullet_ok(bullet: str, entry: dict[str, Any], job_text: str) -> bool:
+    """With job keywords allowed: a bullet still has to be about its own entry.
+
+    At least 40% of its meaningful words come from the entry's facts, and at
+    most a quarter come from neither the entry nor the posting.
+    """
+    def stems(text: str) -> set[str]:
+        return {w[:5] for w in re.findall(r"[a-z][a-z0-9+#]*", text.lower()) if len(w) > 3}
+
+    entry_stems, job_stems = stems(_entry_fact_text(entry)), stems(job_text)
+    words = [w for w in re.findall(r"[a-z][a-z0-9+#]*", bullet.lower()) if len(w) > 3 and w not in GENERIC_WORDS]
+    if not words:
+        return True
+    from_entry = sum(1 for w in words if w[:5] in entry_stems)
+    from_nowhere = sum(1 for w in words if w[:5] not in entry_stems and w[:5] not in job_stems)
+    return from_entry >= 0.4 * len(words) and from_nowhere <= 0.25 * len(words)
+
+
 def _sanitize_ai_plan(
-    data: dict[str, Any], profile: dict[str, Any], fallback: Plan
+    data: dict[str, Any], profile: dict[str, Any], fallback: Plan, job_text: str | None = None, title: str = ""
 ) -> Plan:
+    """Keep only what the profile backs. With job_text (job keywords on), the posting's
+    own terms may go in too, and each one the profile doesn't back is noted."""
+    keywords = job_text is not None
+    job_norm = f" {_flat(job_text or '')} "
     corpus = _profile_corpus(profile)
     entries = profile_entries(profile)
     notes: list[str] = []
+    added_terms: list[str] = []
 
     def exact(names: Any, allowed: list[str]) -> list[str]:
         lookup = {a.lower(): a for a in allowed}
@@ -444,17 +662,32 @@ def _sanitize_ai_plan(
                     notes.append(f"dropped an over-long bullet for {entry_id}")
                     continue
                 problems = ungrounded_terms(bullet, entry, corpus)
-                if problems:
-                    notes.append(f"rejected a bullet for {entry_id} mentioning {', '.join(problems)}")
+                numbers = [p for p in problems if NUMBER_RE.fullmatch(p)]
+                terms = [p for p in problems if p not in numbers]
+                if keywords and numbers:
+                    left = NUMBER_RE.findall(_without_job_terms(bullet, job_norm))
+                    numbers = [n for n in numbers if n in left]
+                # With job keywords on, a term is fine if the posting uses it; numbers never are.
+                outside = [t for t in terms if not keywords or f" {_flat(t)} " not in job_norm]
+                if numbers or outside:
+                    notes.append(f"rejected a bullet for {entry_id} mentioning {', '.join(numbers + outside)}")
                     continue
                 claims = false_claims(bullet, entry)
                 if claims:
                     notes.append(f"rejected a bullet for {entry_id} claiming {', '.join(claims)}")
                     continue
-                if unsupported_share(bullet, entry) > MAX_UNSUPPORTED_SHARE:
+                if keywords:
+                    if not keyword_bullet_ok(bullet, entry, job_text or ""):
+                        notes.append(f"rejected a bullet for {entry_id} straying from its facts: {bullet[:60]}")
+                        continue
+                elif unsupported_share(bullet, entry) > MAX_UNSUPPORTED_SHARE:
                     notes.append(f"rejected a bullet for {entry_id} not clearly backed by its facts: {bullet[:60]}")
                     continue
+                if any(_same_point(bullet, earlier) for earlier in kept):
+                    notes.append(f"dropped a bullet for {entry_id} repeating another: {bullet[:60]}")
+                    continue
                 kept.append(bullet)
+                added_terms += terms
             if not kept:
                 kept = fallback_bullets.get(entry_id, [])
                 notes.append(f"used pre-written bullets for {entry_id}")
@@ -472,7 +705,7 @@ def _sanitize_ai_plan(
     changes = str(data.get("changes", "")).strip()
     if changes:
         notes.insert(0, changes)
-    return Plan(
+    plan = Plan(
         coursework=coursework,
         honors=honors,
         include_high_school=bool(honors),
@@ -480,7 +713,12 @@ def _sanitize_ai_plan(
         skills=skills,
         method="ai",
         notes=notes,
+        added_keywords=list(dict.fromkeys(added_terms)),
     )
+    if keywords:
+        suggested = data.get("added_skills") if isinstance(data.get("added_skills"), list) else []
+        plan = with_job_keywords(plan, profile, job_text or "", title, [str(s) for s in suggested])
+    return plan
 
 
 def ai_plan(
@@ -491,12 +729,15 @@ def ai_plan(
     fallback: Plan,
     exe: str | None = None,
     timeout: int = 300,
+    keywords: bool = False,
 ) -> tuple[Plan | None, str]:
     """Ask Claude Code for a plan. Returns (plan or None, explanation)."""
-    data, reason = ask_claude_json(_ai_prompt(profile, job_text, title, employer), SYSTEM_PROMPT, exe, timeout)
+    data, reason = ask_claude_json(_ai_prompt(profile, job_text, title, employer, keywords),
+                                   KEYWORD_SYSTEM_PROMPT if keywords else SYSTEM_PROMPT, exe, timeout)
     if data is None:
         return None, reason
-    return _sanitize_ai_plan(data, profile, fallback), "tailored with Claude"
+    return (_sanitize_ai_plan(data, profile, fallback, job_text if keywords else None, title),
+            "tailored with Claude" + (", with the posting's keywords" if keywords else ""))
 
 
 def ask_claude_json(
@@ -548,12 +789,63 @@ def _slug(text: str, limit: int = 40) -> str:
 
 
 def _same_point(a: str, b: str) -> bool:
-    """Whether two bullets say the same thing, so a reworded one isn't repeated."""
-    wa = {w for w in re.findall(r"[a-z0-9+#]+", a.lower()) if len(w) > 3}
-    wb = {w for w in re.findall(r"[a-z0-9+#]+", b.lower()) if len(w) > 3}
+    """Whether two bullets say the same thing, so a reworded one isn't repeated.
+
+    Either most of their words are shared, or they share a run of three words that carry
+    the point ("built an electric longboard", "expanding into computer repairs").
+    """
+    wa, wb = _point_words(a), _point_words(b)
     if not wa or not wb:
         return a.strip().lower() == b.strip().lower()
-    return len(wa & wb) / min(len(wa), len(wb)) >= 0.6
+    if len(wa & wb) / min(len(wa), len(wb)) >= 0.5:
+        return True
+    return bool(_point_runs(a) & _point_runs(b))
+
+
+def _point_runs(text: str) -> set[tuple[str, ...]]:
+    words = [w for w in (_point_word(t) for t in re.findall(r"[a-z0-9+#]+", text.lower())) if w]
+    return {tuple(words[i:i + 3]) for i in range(len(words) - 2)}
+
+
+_LINKING_WORDS = {"with", "from", "that", "this", "into", "around", "using", "their", "each", "also", "through",
+                  "while", "over", "about", "them", "were", "have", "been", "which"}
+
+
+def _point_words(text: str) -> set[str]:
+    """The words that carry a bullet's point: no linking words, and "motors" the same as "motor"."""
+    return {w for w in (_point_word(t) for t in re.findall(r"[a-z0-9+#]+", text.lower())) if w}
+
+
+def _point_word(word: str) -> str:
+    """"applying" the same as "apply", "systems" as "system"."""
+    if len(word) <= 3 or word in _LINKING_WORDS:
+        return ""
+    for ending in ("ing", "ed", "es", "s"):
+        if word.endswith(ending) and not word.endswith("ss") and len(word) - len(ending) >= 4:
+            return word[: -len(ending)]
+    return word
+
+
+def course_title(name: str) -> tuple[str, bool]:
+    """A course as the resume shows it, and whether it's still being taken.
+
+    "CMPE 310 (Systems Design and Programming, in progress)" is
+    ("Systems Design and Programming", True): the title says what was learned,
+    the catalog number doesn't, and the line has room for more of them.
+    """
+    text = str(name).strip()
+    current = bool(re.search(r"\bin progress\b", text, re.IGNORECASE))
+    inner = re.match(r"^[A-Z]{2,5}\s*[\d/]+[A-Z]?\s*\((.+)\)\s*$", text)
+    title = inner.group(1) if inner else re.sub(r"\s*\([^)]*\)\s*$", "", text)
+    title = re.sub(r",?\s*in progress\b", "", title, flags=re.IGNORECASE).strip(" ,")
+    return title or text, current
+
+
+def coursework_line(courses: list[str]) -> str:
+    """The coursework as one run of text; courses still being taken are starred, and the star explained."""
+    shown = [course_title(name) for name in courses]
+    line = ", ".join(title + ("*" if current else "") for title, current in shown)
+    return line + (" (*in progress)" if any(current for _, current in shown) else "")
 
 
 def render_pdf(
@@ -604,13 +896,30 @@ def render_pdf(
             from reportlab.lib.utils import simpleSplit
 
             prefix_w = stringWidth(prefix, font, fsize)
-            lines = simpleSplit(body, font, fsize, usable - (x - margin_x) - prefix_w)
+            room = usable - (x - margin_x) - prefix_w
+            lines = simpleSplit(body, font, fsize, room)
+            squeeze = 100
+            if len(lines) > 1 and stringWidth(lines[-1], font, fsize) < room * 0.15:
+                # A word or two alone on the last line: the letters are set a hair narrower
+                # (at most 3%, not visible) to bring them back up.
+                for percent in (99, 98, 97):
+                    tighter = simpleSplit(body, font, fsize, room * 100 / percent)
+                    if len(tighter) < len(lines):
+                        lines, squeeze = tighter, percent
+                        break
             for i, piece in enumerate(lines):
                 if c is not None:
                     c.setFont(font, fsize)
                     if i == 0 and prefix:
                         c.drawString(x, y, prefix)
-                    c.drawString(x + prefix_w, y, piece)
+                    if squeeze == 100:
+                        c.drawString(x + prefix_w, y, piece)
+                    else:
+                        run = c.beginText(x + prefix_w, y)
+                        run.setFont(font, fsize)
+                        run.setHorizScale(squeeze)
+                        run.textOut(piece)
+                        c.drawText(run)
                 y -= line
 
         contact = profile["contact"]
@@ -619,7 +928,9 @@ def render_pdf(
             c.drawString(margin_x, y, contact["name"])
         y -= (size + 5) * 1.35
         linkedin = contact.get("linkedin", "").replace("https://www.", "").replace("https://", "")
-        contact_line = " | ".join(v for v in [contact.get("location"), contact.get("phone"), contact.get("email"), linkedin] if v)
+        github = contact.get("github", "").replace("https://www.", "").replace("https://", "")
+        contact_line = " | ".join(v for v in [contact.get("location"), contact.get("phone"), contact.get("email"), linkedin,
+                                              github] if v)
         text(margin_x, y, [("Times-Roman", contact_line)], size - 1)
         y -= line * 1.35
 
@@ -647,7 +958,7 @@ def render_pdf(
             c.drawString(indent, y, label)
         from reportlab.lib.utils import simpleSplit
 
-        for i, piece in enumerate(simpleSplit(" / ".join(coursework), "Times-Roman", size, usable - 22 - label_w)):
+        for i, piece in enumerate(simpleSplit(coursework_line(coursework), "Times-Roman", size, usable - 22 - label_w)):
             if c is not None:
                 c.setFont("Times-Roman", size)
                 c.drawString(indent + label_w, y, piece)
@@ -705,6 +1016,8 @@ def render_pdf(
         found: list[tuple[float, str, Any]] = []
         for section in profile.get("sections", []):
             for entry in section.get("entries", []):
+                if not on_resume(entry):
+                    continue
                 for order, bullet in enumerate(entry.get("bullets", [])):
                     text = bullet["text"] if isinstance(bullet, dict) else str(bullet)
                     tags = bullet.get("tags", []) if isinstance(bullet, dict) else []
@@ -796,12 +1109,33 @@ def render_pdf(
         return True
 
     size = 11.0
+
+    def course_rows() -> int:
+        from reportlab.lib.utils import simpleSplit
+
+        room = width - 108 - 22 - stringWidth("Relevant Coursework: ", "Times-Italic", size)
+        return len(simpleSplit(coursework_line(coursework), "Times-Roman", size, room))
+
+    def lone_skill() -> bool:
+        """True when the skills line ends with one skill alone on its last line."""
+        from reportlab.lib.utils import simpleSplit
+
+        rows = simpleSplit(", ".join(skills), "Times-Roman", size, width - 108)
+        return len(rows) > 1 and "," not in rows[-1]
+
+    planned_skills = len(skills)  # the plan's own skills; the rest are page-filling extras
+    while len(coursework) > 3 and course_rows() > COURSE_ROWS:
+        coursework.pop()  # the least relevant; the space is worth more to the experience below
     if fill and layout(None, size) >= 0:
         # Fill the rest of the page: most relevant first, skipping anything
         # that would spill onto a second page.
         for _score, kind, value in additions():
             record = add(kind, value)
-            if layout(None, size) < 0:
+            if (
+                layout(None, size) < 0
+                or (kind == "course" and course_rows() > COURSE_ROWS)
+                or (kind == "skill" and lone_skill())
+            ):
                 undo(record)
     for _ in range(40):
         if layout(None, size) >= 0:
@@ -811,6 +1145,10 @@ def render_pdf(
             continue
         if not trim_once():
             break
+    # A smaller size can still leave one skill alone: drop the lowest-ranked
+    # extras (never one the plan chose) until the line reflows.
+    while lone_skill() and len(skills) > planned_skills:
+        skills.pop()
 
     c = pdf_canvas.Canvas(str(path), pagesize=letter)
     c.setTitle(f"{profile['contact']['name']} Resume")
@@ -836,54 +1174,100 @@ def tailor_resume(
     *,
     use_ai: bool = True,
     profile_path: str | Path = PROFILE_PATH,
-    out_dir: str | Path = OUT_DIR,
+    out_dir: str | Path | None = None,
     reuse: bool = True,
+    add_keywords: bool = False,
 ) -> TailorResult:
-    """Build (or reuse) the tailored resume PDF for one job."""
+    """Build (or reuse) the tailored resume PDF for one job.
+
+    add_keywords: work the posting's keywords in even where the profile doesn't
+    back them (only for resumes the student checks and sends himself). These go
+    to KEYWORD_DIR with a CHECK BEFORE SENDING.txt beside them.
+    """
     profile = load_profile(profile_path)
-    folder = Path(out_dir) / f"{job_id}-{_slug(employer)}"
+    folder = Path(out_dir or (KEYWORD_DIR if add_keywords else OUT_DIR)) / f"{job_id}-{_slug(employer)}"
     pdf_path = folder / resume_filename(profile)
     plan_path = folder / "plan.json"
 
     if reuse and pdf_path.exists() and plan_path.exists():
         saved = json.loads(plan_path.read_text(encoding="utf-8"))
-        if saved.get("layout") == LAYOUT_VERSION:
-            return TailorResult(pdf_path, saved.get("method", "saved"), ["reused the resume made earlier for this job"])
+        # One the rules made while Claude couldn't be used is made again properly now that it can,
+        # and one made with the keyword setting the other way round is made again too.
+        if (use_ai and saved.get("method") in ("rules", "ai-earlier")) or bool(saved.get("job_keywords")) != add_keywords:
+            saved = {}
+        elif saved.get("layout") == LAYOUT_VERSION:
+            return TailorResult(pdf_path, saved.get("method", "saved"), ["reused the resume made earlier for this job"],
+                                list(saved.get("added_keywords", [])))
         # Made with an older layout: keep its choices, draw it again the current way.
         known = {f for f in Plan.__dataclass_fields__}
         try:
-            plan = Plan(**{k: v for k, v in saved.items() if k in known})
+            plan = Plan(**{k: v for k, v in saved.items() if k in known}) if saved else None
         except TypeError:
             plan = None
         if plan is not None:
-            _save_resume(profile, plan, folder, pdf_path, plan_path, job_id, title, employer, job_text)
-            return TailorResult(pdf_path, "saved", ["redrew the resume made earlier for this job to fill the page"])
+            _save_resume(profile, plan, folder, pdf_path, plan_path, job_id, title, employer, job_text, add_keywords)
+            return TailorResult(pdf_path, "saved", ["redrew the resume made earlier for this job to fill the page"],
+                                plan.added_keywords)
 
     fallback = rule_plan(profile, job_text, title)
     plan, reason = (None, "AI tailoring is turned off")
     if use_ai:
-        plan, reason = ai_plan(profile, job_text, title, employer, fallback)
+        plan, reason = ai_plan(profile, job_text, title, employer, fallback, keywords=add_keywords)
     if plan is None:
         plan = fallback
         plan.notes.append(reason)
+        if add_keywords:
+            earlier = _earlier_ai_plan(Path(OUT_DIR) / folder.name, profile, profile_path)
+            if earlier is not None:  # Claude's checked version from before beats the rules' one
+                plan = earlier
+                plan.notes.append("started from the resume Claude tailored for this job earlier")
+            plan = with_job_keywords(plan, profile, job_text, title)
 
-    _save_resume(profile, plan, folder, pdf_path, plan_path, job_id, title, employer, job_text)
-    return TailorResult(pdf_path, plan.method, plan.notes)
+    _save_resume(profile, plan, folder, pdf_path, plan_path, job_id, title, employer, job_text, add_keywords)
+    return TailorResult(pdf_path, plan.method, plan.notes, plan.added_keywords)
+
+
+def _earlier_ai_plan(folder: Path, profile: dict[str, Any], profile_path: str | Path) -> Plan | None:
+    """The plan Claude made for this job before, without added keywords, if there is one
+    made since the profile last changed.
+
+    Marked "ai-earlier" so a later run with Claude makes a proper keyword version."""
+    plan_file = folder / "plan.json"
+    try:
+        if plan_file.stat().st_mtime < Path(profile_path).stat().st_mtime:
+            return None  # made from an older profile
+        saved = json.loads(plan_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if saved.get("method") != "ai" or saved.get("job_keywords"):
+        return None
+    entries = profile_entries(profile)
+    if any(e.get("id") not in entries for s in saved.get("sections", []) for e in s.get("entries", [])):
+        return None
+    known = {f for f in Plan.__dataclass_fields__}
+    try:
+        plan = Plan(**{k: v for k, v in saved.items() if k in known})
+    except TypeError:
+        return None
+    plan.method, plan.notes, plan.added_keywords = "ai-earlier", [], []
+    return plan
 
 
 # Bump when the resume layout changes, so resumes made earlier are redrawn.
-LAYOUT_VERSION = 2  # 2: skills near the top, page filled
+LAYOUT_VERSION = 3  # 2: skills near the top, page filled. 3: coursework by title, no stray last words
 
 
 def _save_resume(
     profile: dict[str, Any], plan: Plan, folder: Path, pdf_path: Path, plan_path: Path,
-    job_id: str, title: str, employer: str, job_text: str,
+    job_id: str, title: str, employer: str, job_text: str, keywords: bool = False,
 ) -> None:
     render_pdf(profile, plan, pdf_path, job_text=job_text, title=title)
     folder.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(
-        json.dumps(dict(asdict(plan), layout=LAYOUT_VERSION, job={"id": job_id, "title": title, "employer": employer}),
-                   indent=2),
+        json.dumps(dict(asdict(plan), layout=LAYOUT_VERSION, job_keywords=keywords,
+                        job={"id": job_id, "title": title, "employer": employer}), indent=2),
         encoding="utf-8",
     )
+    if keywords:
+        (folder / CHECK_FILE).write_text(check_list(plan, title, employer), encoding="utf-8")
     (folder / "job_posting.txt").write_text(f"{title}\n{employer}\n\n{job_text}", encoding="utf-8")

@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 import applied_myself
+import company_cap
 import cover_letter
 import essay_answers
 import form_answers
@@ -49,6 +50,7 @@ from employer_sites import (
     EssayWriter,
     LetterText,
     WorkOut,
+    apply_address,
     norm,
     pick_option,
     profile_answers,
@@ -78,6 +80,7 @@ SAYS = {
     "later": "left for another run",
     "uncertain": "Submit was pressed, but the site never confirmed it",
     "set_aside": "left for a run with you there",
+    "company_full": "left for other companies (that company has had enough of your applications)",
     "needs_manual": "left for you to finish",
     "needs_account": "needs your own account on the employer's site",
     "closed": "no longer open",
@@ -100,15 +103,42 @@ OFF_FIELD = re.compile(
     r"\b(legal|compliance|paralegal|counsel|sales|sdr|bdr|business development|account (executive|manager)|marketing|"
     r"recruit\w*|talent|human resources|hr|people (ops|operations)|finance|financial|accounting|audit\w*|tax|treasury|"
     r"investment|customer (success|support)|content|copywrit\w*|communications|public relations|graphic|ux|"
-    r"product (design|manager|management)|civil|chemical|biolog\w*|clinical|nursing)\b",
+    r"product (design|manager|management)|artist|civil|mechanical|chemical|biolog\w*|clinical|nursing)\b",
     re.IGNORECASE,
 )
 ON_FIELD = re.compile(r"\b(software|hardware|firmware|embedded|electrical|electronics?|computer|robotics|fpga|asic|rtl|"
                       r"developer|programmer)\b", re.IGNORECASE)
 
+# The student wants computer engineering roles over computer science ones. An automatic run takes those first,
+# then general software, then what leans to computer science.
+CE_FIELD = re.compile(
+    r"\b(embedded|firmware|hardware|electrical|electronics?|computer engineer\w*|fpga|asic|rtl|vlsi|soc|silicon|"
+    r"semiconductors?|chips?|circuits?|pcb|analog|digital design|design verification|dsp|signal processing|rf|"
+    r"power (electronics|systems?)|mechatronics|robotics?|controls?|avionics|gnc|flight software|sensors?|"
+    r"electromechanical|test (engineer\w*|operations)|kernel|drivers?|low[- ]level|systems engineer\w*|autonomy|perception)\b",
+    re.IGNORECASE,
+)
+CS_LEANING = re.compile(
+    r"\b(web|front[- ]?end|back[- ]?end|full[- ]?stack|mobile|ios|android|data|machine learning|ml|ai|llm|cloud|devops|"
+    r"sre|site reliability|quant\w*|trading|security|product|growth|platform|research|analyst|forward deployed)\b",
+    re.IGNORECASE,
+)
+
 SEND = "  Send this application? [y]es / [n]o, never / [l]ater / [q]uit: "
 SEND_STUCK = ("  Send this application? [y]es / [a]lready went through, I have its confirmation email / "
               "[n]o, never / [l]ater / [q]uit: ")
+
+
+def field_order(title: str) -> int:
+    """0 for a computer engineering role, 1 for general software, 2 for one that leans to computer science."""
+    if CE_FIELD.search(title):
+        return 0
+    return 2 if CS_LEANING.search(title) else 1
+
+
+def own_site(posting: dict[str, Any]) -> bool:
+    """Whether a posting's form is on the company's own careers page, not on its hiring software's site."""
+    return posting["source"] == "elsewhere" and bool(posting.get("ats_url")) and site_kind(posting["url"])[0] == "other"
 
 
 def off_field(title: str) -> bool:
@@ -146,6 +176,11 @@ class BackOff:
         elif stuck in ("code", "check", "unconfirmed"):
             self.run.setdefault(kind, []).append(stuck)
 
+    def wants_code(self, kind: str) -> bool:
+        """Whether this kind of site's last form this run stopped on a code it emailed."""
+        seen = self.run.get(kind, [])
+        return kind in FORM_SITES and bool(seen) and seen[-1] == "code"
+
     def reason(self, kind: str) -> str:
         """Why this kind of site is left alone for the rest of the run, or "" when it isn't."""
         seen = self.run.get(kind, [])
@@ -155,6 +190,17 @@ class BackOff:
         if len(seen) > self.patience:
             return f"hasn't confirmed the last {self.patience + 1} applications"
         return ""
+
+
+# Starts "the site wanted", so it counts as waiting on the student (and "Apply on employer sites", option 4, goes back over it).
+HELD = ("the site wanted a code it emails you on applications like this, so this one was filled in and left open in "
+        "the browser for you to press Submit; nothing was sent")
+
+
+def code_employers(record: "Record") -> set[str]:
+    """Employers whose forms have asked for an emailed code before."""
+    return {str(entry.get("employer", "")).strip().lower() for entry in record.entries.values()
+            if str(entry.get("note", "")).startswith("the site wanted") and "code" in str(entry.get("note", ""))}
 
 
 def keep_picture(site: EmployerSite, posting: dict[str, Any]) -> None:
@@ -226,13 +272,14 @@ class Record:
         return str(self.entries.get(posting_id, {}).get("status", ""))
 
     def note(self, posting: dict[str, Any], status: str, note: str, link: str = "", site: str = "",
-             filled: list[str] | None = None, answers: int = 0) -> None:
+             filled: list[str] | None = None, answers: int = 0, ai: bool = True) -> None:
         self.entries[posting["id"]] = {
             "status": status, "note": note[:400], "title": posting["title"], "employer": posting["employer"],
             "listing": posting["url"], "link": link, "site": site, "list": posting["source"],
             # Which questions were answered, never the answers themselves.
             "answered": [f.split(":", 1)[0] for f in (filled or [])][:60],
             "answers": answers,  # how many saved answers there were, to know when a retry could go better
+            "ai": ai,  # whether Claude could work answers out; one filled without it is worth a retry once it's back
             "when": datetime.now().isoformat(timespec="seconds"),
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -331,6 +378,14 @@ class Papers:
     def _folder_id(posting: dict[str, Any]) -> str:
         return posting["id"].replace("/", "-")[:60]
 
+    @staticmethod
+    def _by_rules(resume: Path) -> bool:
+        """Whether a resume made earlier was the plain one the rules make when Claude can't be used."""
+        try:
+            return json.loads((resume.parent / "plan.json").read_text(encoding="utf-8")).get("method") == "rules"
+        except (OSError, ValueError, AttributeError):
+            return False
+
     def _made_earlier(self, posting: dict[str, Any], ending: str) -> Path | None:
         for folder in tailor.OUT_DIR.glob(f"{self._folder_id(posting)}-*"):
             for path in folder.glob(f"*{ending}"):
@@ -357,6 +412,9 @@ class Papers:
         if not self.tailor:
             return self.resume
         made = self._made_earlier(posting, "_Resume.pdf")
+        if made is not None and self._by_rules(made) and self.can_write and posting["description"] \
+                and not self.out_of_claude and self._use_ai():
+            made = None  # made while Claude couldn't be used; now it can, so it's tailored properly
         if made is not None:
             print(f"  resume: the one tailored to this job earlier ({made.name})")
             return made
@@ -785,10 +843,19 @@ def main(argv: list[str] | None = None) -> int:
 
     record = Record(DATA_DIR / "employer_applications.json")
     links = Links(DATA_DIR / "employer_links.json")
+    # At most a few applications per company, counted with Handshake's and the student's own.
+    cap = company_cap.CompanyCap.from_config(config, DATA_DIR)
+    capped = 0
     answers, profile_path = load_answers()
     done = applied_myself.ids()
     listing = manual_list()
     postings = []
+    _back: list[bool] = []
+
+    def claude_back() -> bool:
+        if not _back:
+            _back.append(bool(config.get("use_ai_for_tailoring", True)) and tailor.claude_ready()[0])
+        return _back[0]
     args.max = max(1, min(args.max, MOST_PER_RUN))
     listed = chosen_postings(args.list)
     for posting in listed[: args.top] if args.top > 0 else listed:
@@ -796,6 +863,9 @@ def main(argv: list[str] | None = None) -> int:
         if posting["id"] in done or status == "applied" or listing.is_removed(posting["id"]):
             continue
         if auto and off_field(posting["title"]):
+            continue
+        if not args.stuck and not args.links_only and cap.full(posting["employer"]):
+            capped += 1
             continue
         if args.stuck:
             if not waiting_on_you(record.entries.get(posting["id"], {})):
@@ -807,14 +877,17 @@ def main(argv: list[str] | None = None) -> int:
             if waiting_on_you(record.entries[posting["id"]]):  # opening it again only gets another code emailed
                 continue
             # A form left for want of an answer is only worth opening again once there are new answers,
-            if left.startswith("still empty") and record.entries[posting["id"]].get("answers") == len(answers):
+            if left.startswith("still empty") and record.entries[posting["id"]].get("answers") == len(answers) and (
+                    record.entries[posting["id"]].get("ai", True) or not claude_back()):
                 continue
             # and one an automatic run never sends isn't worth opening again at all.
             if left.startswith((UNFAMILIAR[:20], NO_RESUME_SLOT[:20], OWN_HAND[:20])):
                 continue
         postings.append(posting)
-    if auto:  # What usually goes through comes first, in case Claude's limit ends the run early. Otherwise best fit first.
-        postings.sort(key=lambda p: site_kind(p["url"] if p["source"] == "elsewhere" else links.get(p["id"]) or "")[0] != "ashby")
+    if auto:  # The company's own site first, as the student asked, then what usually goes through, in case Claude's
+        # limit ends the run early. Otherwise best fit first.
+        postings.sort(key=lambda p: (0 if own_site(p) else 1 if site_kind(
+            p["url"] if p["source"] == "elsewhere" else links.get(p["id"]) or "")[0] == "ashby" else 2, field_order(p["title"])))
     if not postings and args.stuck:
         print("No form on that list is waiting on you: none got stuck after Submit.")
         return 0
@@ -851,6 +924,10 @@ def main(argv: list[str] | None = None) -> int:
             else "written for each job and given wherever its form takes one"))
         print(f"  this run : up to {args.max} " + ("applications sent" if auto else "forms")
               + f", from {len(postings)} postings on the list")
+        if cap.most and not args.stuck:
+            print(f"  companies: at most {cap.most} applications each"
+                  + (f"; {capped} postings at {cap.companies_full()} companies that already have that many are left out"
+                     if capped else ""))
         print(f"  answers  : {len(answers)} from your profile and saved answers; "
               + ("the rest are worked out from your profile with Claude, then " if papers.working_out else "the rest are ")
               + ("asked here and remembered" if ask else "left for you"))
@@ -884,7 +961,11 @@ def main(argv: list[str] | None = None) -> int:
     kinds: dict[str, int] = {}
     backing_off = BackOff(KEEP_GOING_PATIENCE if args.keep_going else 2)
     handled = 0
+    tabs_left = 0  # forms left open in the browser, waiting on a code
     signed_in: bool | None = None
+    # A form whose site will want an emailed code is filled in and left open unsent, so no code goes out at night.
+    wants_code = code_employers(record)
+    most_left = int(config.get("most_tabs_left_open", 40))  # a browser with hundreds of tabs open grinds to a halt
 
     try:
         with HandshakeSession(config, load_selectors(), DATA_DIR / "browser_profile") as session:
@@ -894,6 +975,9 @@ def main(argv: list[str] | None = None) -> int:
                 if handled >= args.max and not args.links_only:
                     print(f"\nThat's {args.max}, the most for this run.")
                     break
+                if not args.stuck and not args.links_only and cap.full(posting["employer"]):  # filled up this run
+                    counts["company_full"] = counts.get("company_full", 0) + 1
+                    continue
                 print(f"\n[{number}/{len(postings)}] {posting['title'][:70]} @ {posting['employer']}"
                       f"  (fit {round(posting['score'])})")
 
@@ -931,6 +1015,10 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  -> {site_name}" + ("  (needs your own account)" if kind == "account" else ""))
                     continue
                 why = backing_off.reason(kind) if auto else ""
+                hold = auto and session.can_leave_open() and session.left_open() < most_left and (
+                    posting["employer"].strip().lower() in wants_code or backing_off.wants_code(kind))
+                if why and hold and "code" in why:
+                    why = ""  # filled in and left open instead of set aside
                 if why:  # not recorded, so a later run comes back to it
                     counts["set_aside"] = counts.get("set_aside", 0) + 1
                     print(f"  -> {SAYS['set_aside']}: {site_name} {why}")
@@ -943,6 +1031,13 @@ def main(argv: list[str] | None = None) -> int:
                         state, note = site.open(link)
                     except Exception:
                         state = "stopped"
+                hosted = apply_address(posting.get("ats_url") or "")
+                if state in ("no_form", "failed") and kind == "other" and site_kind(hosted)[0] in FORM_SITES \
+                        and not (auto and backing_off.reason(site_kind(hosted)[0])):
+                    print(f"  no form on the company's own page; going to its {site_kind(hosted)[1]} page instead")
+                    link, (kind, site_name) = hosted, site_kind(hosted)
+                    print(f"  {link}")
+                    state, note = site.open(link)
                 if state == "stopped":
                     print(CLOSED_MESSAGE)
                     break
@@ -1025,6 +1120,8 @@ def main(argv: list[str] | None = None) -> int:
                     elif report.written and args.hold_essays:
                         status, note = "needs_manual", ("holds a written answer for you to read first; run without "
                                                         "--auto-submit to see it, or without --hold-essays to send it")
+                    elif hold:
+                        status, note = "needs_manual", HELD
                     else:
                         status, note = site.submit()
                         pressed = True
@@ -1061,16 +1158,32 @@ def main(argv: list[str] | None = None) -> int:
 
                 counts[status] = counts.get(status, 0) + 1
                 if status != "later":
-                    record.note(posting, status, note, link, site_name, report.filled, len(answers))
+                    record.note(posting, status, note, link, site_name, report.filled, len(answers),
+                                ai=papers._use_ai() and not papers.out_of_claude)
                 if status == "applied":
                     mark_applied(posting, link)
+                if company_cap.sent_on_site({"status": status, "note": note}):
+                    cap.add(posting["employer"], posting["id"])
                 print(f"  -> {SAYS.get(status, status)}" + (f": {note}" if note else ""))
                 if pressed and status in ("uncertain", "needs_manual"):
                     keep_picture(site, posting)  # what was the site waiting for?
+                if pressed and site.stuck == "code":
+                    wants_code.add(posting["employer"].strip().lower())
+                held = auto and note == HELD
+                if auto and (held or (pressed and site.stuck == "code")) and session.keep_open(site.page):
+                    # Left as it is, for when the student is back.
+                    try:
+                        site.leave_open(session.new_tab())
+                        print("     its tab is left open in the browser: " + (
+                            "press Submit there, then type in the code the site emails you" if held
+                            else "type the emailed code in there and press Submit"))
+                    except Exception:
+                        pass
                 if status in {"applied", "uncertain"} and handled < args.max and number < len(postings):
                     pause = random.uniform(float(low), float(high))
                     print(f"  waiting {pause:.0f}s before the next one")
                     time.sleep(pause)
+            tabs_left = session.left_open()
     finally:
         results = record.write_csv(listing.folder) if record.entries else None
         try:
@@ -1090,6 +1203,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nEvery posting tried so far, with its employer link: {results}")
     if essays_page is not None and not args.links_only:
         print(f"Every essay written for you so far: {essays_page}")
+    if tabs_left and not args.links_only:
+        print(f"\n{tabs_left} filled-in form{'s are' if tabs_left != 1 else ' is'} left open in the browser for you. "
+              "Press Submit in each tab and type in the code its site emails you.")
     marked = applied_myself.ids()
     waiting = sum(1 for key, entry in record.entries.items() if key not in marked and waiting_on_you(entry))
     if waiting and not args.links_only:

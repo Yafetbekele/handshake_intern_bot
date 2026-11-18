@@ -104,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top", type=int, default=20)
     parser.add_argument("--resumes", action="store_true", help="make tailored resumes too")
     parser.add_argument("--no-ai", action="store_true")
+    parser.add_argument("--no-keywords", action="store_true",
+                        help="resumes with only what your profile backs (the posting's keywords are added by default)")
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args(argv)
 
@@ -129,8 +131,11 @@ def main(argv: list[str] | None = None) -> int:
         entry = dict(posting, rank=rank, letter=letter.path)
         if args.resumes:
             try:
-                entry["resume"] = tailor.tailor_resume(folder_id, posting["title"], posting["employer"],
-                                                       posting["description"], use_ai=not args.no_ai).path
+                made = tailor.tailor_resume(folder_id, posting["title"], posting["employer"], posting["description"],
+                                            use_ai=not args.no_ai, add_keywords=not args.no_keywords)
+                entry["resume"] = made.path
+                if made.added:
+                    print(f"  resume adds, check before sending: {', '.join(made.added)}")
             except Exception as exc:
                 print(f"  couldn't tailor the resume ({type(exc).__name__})")
         entries.append(entry)

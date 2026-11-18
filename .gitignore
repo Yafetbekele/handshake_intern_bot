@@ -20,3 +20,7 @@ Internships to apply to yourself/
 # Personal career profile and tailored resumes, never uploaded
 profile/
 tailored_resumes/
+
+# Keyword resumes and notes for new Claude chats (they hold your contact details)
+tailored_resumes_with_job_keywords/
+NEW_CHAT_*.md

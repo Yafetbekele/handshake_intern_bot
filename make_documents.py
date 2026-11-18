@@ -82,14 +82,19 @@ def slug_id(title: str, employer: str) -> str:
     return tailor._slug(title, 40) or "posting"
 
 
-def make(what: str, job_id: str, title: str, employer: str, text: str, use_ai: bool = True) -> list[Path]:
+def make(what: str, job_id: str, title: str, employer: str, text: str, use_ai: bool = True,
+         keywords: bool = True) -> list[Path]:
     made: list[Path] = []
     if what in ("resume", "both"):
         print("\nTailoring your resume for this posting...")
-        result = tailor.tailor_resume(job_id, title, employer, text, use_ai=use_ai, reuse=False)
+        result = tailor.tailor_resume(job_id, title, employer, text, use_ai=use_ai, reuse=False, add_keywords=keywords)
         print(f"  resume ({result.method}): {result.path}")
         for note in result.notes[:3]:
             print(f"    {note}")
+        if result.added:
+            print(f"\n  CHECK BEFORE SENDING: these come from the posting and your profile doesn't back them:")
+            print(f"    {', '.join(result.added)}")
+            print(f"  The list is also in {result.path.parent / tailor.CHECK_FILE}")
         made.append(result.path)
     if what in ("letter", "both"):
         print("\nWriting a cover letter for this posting...")
@@ -110,6 +115,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--title", default="", help="job title, with --text")
     parser.add_argument("--employer", default="", help="employer, with --text")
     parser.add_argument("--no-ai", action="store_true", help="use rules and your baseline letter, without Claude")
+    parser.add_argument("--no-keywords", action="store_true",
+                        help="only what your profile backs; by default the posting's keywords are added for you to check")
     parser.add_argument("--open", dest="open_folder", action="store_true", help="open the folder when finished")
     args = parser.parse_args(argv)
 
@@ -134,17 +141,20 @@ def main(argv: list[str] | None = None) -> int:
     if not title or not employer or not text:
         raise SystemExit("A job title, an employer and the posting text are all needed.")
 
-    made = make(args.what, job_id, title, employer, text, use_ai=not args.no_ai)
+    made = make(args.what, job_id, title, employer, text, use_ai=not args.no_ai, keywords=not args.no_keywords)
     if not made:
         return 1
-    folder = made[0].parent
-    print(f"\nSaved in {folder}")
-    print("The .txt copy of a letter is there too, for pasting into a web form.")
+    folders = list(dict.fromkeys(path.parent for path in made))  # a keyword resume has its own folder
+    for folder in folders:
+        print(f"\nSaved in {folder}")
+    if args.what != "resume":
+        print("The .txt copy of a letter is there too, for pasting into a web form.")
     if args.open_folder or not (args.url or args.text):
-        try:
-            os.startfile(str(folder))  # type: ignore[attr-defined]
-        except (AttributeError, OSError):
-            pass
+        for folder in folders:
+            try:
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            except (AttributeError, OSError):
+                pass
     return 0
 
 

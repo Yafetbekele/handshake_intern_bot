@@ -66,6 +66,7 @@ TYPED_LETTER = "Dear Hiring Team,\n\nI built a Raspberry Pi weather station.\n\n
 
 import applied_myself  # noqa: E402
 import employer_apply  # noqa: E402
+import employer_sites  # noqa: E402
 import essay_answers  # noqa: E402
 import fake_employer_sites  # noqa: E402
 import form_answers  # noqa: E402
@@ -230,6 +231,16 @@ for title in ("Legal & Compliance Intern", "SDR Intern", "Civil Engineering Inte
     check(f"'{title}' is outside the student's field", employer_apply.off_field(title))
 for title in ("Software Engineer Intern", "Electrical Engineer Intern", "Compliance Software Intern", "RTL Intern", "Engineering Intern"):
     check(f"'{title}' isn't", not employer_apply.off_field(title))
+for first, second in (("Firmware Intern", "Software Engineer Intern"), ("Software Engineer Intern", "Frontend Intern"),
+                      ("Hardware Security Engineer Intern", "Security Engineer Intern"),
+                      ("Rust Software Engineering Intern, Chip Design Tools", "Backend Software Intern")):
+    check(f"'{first}' is taken before '{second}'", employer_apply.field_order(first) < employer_apply.field_order(second))
+check("a form on the company's own careers page is told apart", employer_apply.own_site(
+    {"source": "elsewhere", "url": "https://www.skydio.com/careers?ashby_jid=1", "ats_url": "https://jobs.ashbyhq.com/skydio/1"}))
+check("from one on Ashby's own site", not employer_apply.own_site(
+    {"source": "elsewhere", "url": "https://jobs.ashbyhq.com/skydio/1", "ats_url": "https://jobs.ashbyhq.com/skydio/1"}))
+check("an Application tab inside a company's page counts as the way in", bool(employer_sites.EMBEDDED_APPLY.match("Application")))
+check("but not on the page itself", not employer_sites.APPLY_LINK.match("Application"))
 check("length follows the question", essay_answers.limits("Why us? (150 words max)")[:2] == (90, 150), essay_answers.limits("Why us? (150 words max)"))
 check("and the box's size", essay_answers.limits("Why us?", max_chars=280)[1] <= 40)
 
@@ -697,8 +708,12 @@ try:
         check("told to keep going, it tries more before leaving the rest", patient.reason("greenhouse") == "")
         patient.saw("greenhouse", "needs_manual", "code")
         check("but not without end", "code it emails you" in patient.reason("greenhouse"))
+        check("a site whose last form stopped on a code is known to want one",
+              backing_off.wants_code("greenhouse") and not backing_off.wants_code("lever"))
         backing_off.saw("greenhouse", "applied", "")
-        check("until one goes through again", backing_off.reason("greenhouse") == "")
+        check("until one goes through again", backing_off.reason("greenhouse") == "" and not backing_off.wants_code("greenhouse"))
+        check("a form held back unsent counts as waiting on the student",
+              employer_apply.waiting_on_you({"status": "needs_manual", "note": employer_apply.HELD}))
         for _ in range(3):
             backing_off.saw("ashby", "uncertain", "unconfirmed")
         check("three in a row that never confirm do the same", "hasn't confirmed" in backing_off.reason("ashby"))

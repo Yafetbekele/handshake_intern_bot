@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory() as _tmp:
     page = ranked.save()
     assert [r["job_id"] for r in ManualList(Path(_tmp) / "ranked").items()] == ["b", "c", "a"], "only the best 3 kept"
     assert "matches your resume: fpga" in page.read_text(encoding="utf-8")
-    assert ManualList(Path(_tmp) / "y").limit == 100, "the list holds 100"
+    assert ManualList(Path(_tmp) / "y").limit == 250, "the list holds 250"
     print("  ordered by fit and capped")
     print("  OK")
 

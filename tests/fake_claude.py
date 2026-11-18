@@ -136,6 +136,19 @@ if "-p" in args:
         "skills": ["Raspberry Pi", "Python", "Kubernetes"],
         "changes": "Led with the embedded weather station project.",
     }
+    if '"added_skills"' in prompt:
+        # Job keywords allowed: one fair use of a posting term, plus ones the checks must still stop
+        # (a duty with nothing to do with the entry, an invented number, an award, a tool not in the posting).
+        plan["sections"][0]["entries"][0]["bullets"] = [
+            "Built a Raspberry Pi weather station that reads three sensors over I2C every 5 minutes with Python.",
+            "Verified PCIe controllers with UVM testbenches in SystemVerilog.",
+            "Logged 500 readings an hour from the station with Python scripts.",
+        ]
+        plan["sections"][1]["entries"][0]["bullets"] = [
+            "Troubleshoot hardware and software issues on Linux, resolving about 40 tickets per week.",
+            "Won the campus innovation award for support work.",
+        ]
+        plan["added_skills"] = ["SystemVerilog", "UVM", "Kubernetes"]
     envelope = {"type": "result", "is_error": False, "result": "```json\n" + json.dumps(plan) + "\n```"}
     print(json.dumps(envelope))
     sys.exit(0)

@@ -46,6 +46,7 @@ from main import DATA_DIR, manual_list
 HERE = Path(__file__).resolve().parent
 COMPANIES_PATH = HERE / "elsewhere_companies.json"
 SEEN_PATH = DATA_DIR / "elsewhere_seen.json"
+ADDED_PATH = DATA_DIR / "added_by_hand.json"  # postings the student asked to have on the list
 USER_AGENT = "internship-finder/1.0 (personal job search)"
 
 INTERN_TITLE = re.compile(r"\b(intern|interns|internship|internships|co-?op)\b", re.I)
@@ -92,6 +93,7 @@ def from_greenhouse(company: dict) -> list[dict]:
         found.append({
             "id": f"gh-{board}-{job['id']}", "title": job.get("title", ""), "employer": company["name"],
             "location": (job.get("location") or {}).get("name", ""), "url": job.get("absolute_url", ""),
+            "ats_url": f"https://job-boards.greenhouse.io/{board}/jobs/{job['id']}",
             "description": plain(detail.get("content", "")), "posted": (job.get("first_published") or "")[:10],
         })
     return found
@@ -117,20 +119,39 @@ def from_lever(company: dict) -> list[dict]:
     return found
 
 
+def ashby_own_page(board: str) -> str:
+    """The company's own careers page, when it shows its Ashby postings there; "" when it sends people to Ashby's."""
+    query = "query O($n: String!) { o: organizationFromHostedJobsPageName(organizationHostedJobsPageName: $n) { customJobsPageUrl } }"
+    body = json.dumps({"operationName": "O", "variables": {"n": board}, "query": query}).encode()
+    request = urllib.request.Request("https://jobs.ashbyhq.com/api/non-user-graphql?op=O", body,
+                                     {"Content-Type": "application/json", "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            page = (((json.loads(response.read()).get("data") or {}).get("o") or {}).get("customJobsPageUrl") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return page if page.startswith("http") and "ashbyhq.com" not in page else ""
+
+
 def from_ashby(company: dict) -> list[dict]:
     board = company["board"]
     listed = get_json(f"https://api.ashbyhq.com/posting-api/job-board/{quote(board)}?includeCompensation=true").get("jobs", [])
     found = []
+    own = None
     for job in listed:
         title = job.get("title", "")
         if not (is_internship_title(title) or re.search(r"\bintern", job.get("employmentType", "") or "", re.I)):
             continue
         if job.get("isListed") is False:
             continue
+        if own is None:  # the student would rather apply on the company's own site, where it has one
+            own = ashby_own_page(board)
+        hosted = job.get("jobUrl", "")
         found.append({
             "id": f"ab-{board}-{job['id']}", "title": title, "employer": company["name"],
             "location": job.get("location", "") or ("Remote" if job.get("isRemote") else ""),
-            "url": job.get("jobUrl", ""), "description": job.get("descriptionPlain", "") or plain(job.get("descriptionHtml", "")),
+            "url": f"{own}{'&' if '?' in own else '?'}ashby_jid={job['id']}" if own else hosted, "ats_url": hosted,
+            "description": job.get("descriptionPlain", "") or plain(job.get("descriptionHtml", "")),
             "posted": (job.get("publishedAt") or "")[:10],
         })
     return found
@@ -204,6 +225,29 @@ def keep(posting: dict, major: majors.MajorProfile, min_score: float, us_only: b
 # ------------------------------------------------------------------ output
 
 
+def added_by_hand(done: set[str], profile: dict, terms: list[str]) -> list[deep_rank.Graded]:
+    """Postings the student picked out himself (from a job search, say), to head the list.
+
+    They're his choice, so nothing filters them; only the ones he has since applied to go.
+    Most have no posting text, so the fit shown is from the title alone.
+    """
+    try:
+        entries = json.loads(ADDED_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    postings = [dict(e, job_id=e["id"], description=e.get("description") or e["title"], posted="")
+                for e in entries if isinstance(e, dict) and e.get("id") and e.get("title") and e["id"] not in done]
+    graded = {g.job_id: g for g in deep_rank.grade_all(postings, profile, terms)}
+    picked = []
+    for posting in postings:
+        g = graded.get(posting["id"]) or deep_rank.Graded(
+            job_id=posting["id"], title=posting["title"], employer=posting.get("employer", ""),
+            location=posting.get("location", ""), url=posting.get("url", ""), score=0.0, parts={}, family="", matched=[])
+        g.flags = ["you added this"] + ([posting["note"]] if posting.get("note") else [])
+        picked.append(g)
+    return sorted(picked, key=lambda g: -g.score)
+
+
 def load_seen() -> dict[str, str]:
     try:
         return json.loads(SEEN_PATH.read_text(encoding="utf-8"))
@@ -265,7 +309,8 @@ def write_page(ranked: list[deep_rank.Graded], new_ids: set[str], folder: Path, 
 <p>Checked {stats['companies']} company career sites on {date.today().strftime('%B %d, %Y').replace(' 0', ' ')}.
 {stats['internships']} internship postings; {stats['kept']} fit a summer Computer Engineering search and aren't on Handshake.
 Best fit first, at most 2 per company. <strong>{len(new_ids)} new since the last run</strong>, highlighted.
-Hover a score for its parts. Links go to each company's own application page.</p>
+Hover a score for its parts. Links go to each company's own application page.
+{f"The first {stats['picked']} are ones you added yourself; their links go to the company's careers page, where you look the title up." if stats.get('picked') else ""}</p>
 {page_bits.tools()}
 <div class="wrap"><table>
 <thead><tr><th>#</th><th>Fit</th><th>Internship</th><th>Company</th><th>Location</th><th>Pay</th><th>Kind</th><th></th></tr></thead>
@@ -360,12 +405,14 @@ def main(argv: list[str] | None = None) -> int:
             g.flags.append("found by web search")
     graded.sort(key=lambda g: -g.score)
     ranked = deep_rank.spread(graded, args.per_company)
+    picked = added_by_hand(done, profile, terms)
+    ranked = picked + [g for g in ranked if g.job_id not in {p.job_id for p in picked}]
 
     seen = load_seen()
     today = date.today().isoformat()
     new_ids = {g.job_id for g in ranked if g.job_id not in seen}
-    for posting in kept:
-        seen.setdefault(posting["id"], today)
+    for job_id in [posting["id"] for posting in kept] + [g.job_id for g in picked]:
+        seen.setdefault(job_id, today)
     SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     SEEN_PATH.write_text(json.dumps(seen, indent=1), encoding="utf-8")
     # The ranked postings with their full text, in order, for letters_for_list.py.
@@ -376,7 +423,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     page = write_page(ranked, new_ids, manual_list().folder,
-                      {"companies": len(companies), "internships": len(found), "kept": len(kept)})
+                      {"companies": len(companies), "internships": len(found), "kept": len(kept),
+                       "picked": len(picked)})
     print(f"\n{len(ranked)} ranked, {len(new_ids)} new since last time. Top 10:")
     for rank, g in enumerate(ranked[:10], start=1):
         print(f"  {rank:2d}. {round(g.score):3d} {'NEW ' if g.job_id in new_ids else '    '}{g.title[:50]} @ {g.employer}")

@@ -31,6 +31,7 @@ os.environ["HSBOT_CLAUDE"] = str(FAKE)
 # Never the student's real profile, letter or tailored resumes.
 os.environ["HSBOT_PROFILE"] = str(HERE / "sample_profile.json")
 os.environ["HSBOT_TAILORED_DIR"] = str(WORK / "tailored")
+os.environ["HSBOT_KEYWORD_DIR"] = str(WORK / "keywords")
 os.environ["HSBOT_COVER_BASE"] = str(WORK / "no_base.txt")
 os.environ["HSBOT_DATA_DIR"] = str(WORK / "data")
 
@@ -170,7 +171,12 @@ try:
           and not (folder / "Jane_Doe_Resume.pdf").exists(), str(sorted(p.name for p in folder.glob("*"))))
     code = make_documents.main(["resume", "--text", str(posting), "--title", "Backend Intern",
                                 "--employer", "Delta Systems", "--no-ai"])
-    check("resume-only run adds the resume", code == 0 and (folder / "Jane_Doe_Resume.pdf").exists())
+    keyword_folder = WORK / "keywords" / "backend-intern-delta-systems"
+    check("resume-only run adds the resume, with the posting's keywords",
+          code == 0 and (keyword_folder / "Jane_Doe_Resume.pdf").exists() and (keyword_folder / "CHECK BEFORE SENDING.txt").exists())
+    code = make_documents.main(["resume", "--text", str(posting), "--title", "Backend Intern",
+                                "--employer", "Delta Systems", "--no-ai", "--no-keywords"])
+    check("--no-keywords makes the usual one beside the letter", code == 0 and (folder / "Jane_Doe_Resume.pdf").exists())
     check("the posting link's id is found", make_documents.job_id_from(
         "https://app.joinhandshake.com/job-search/11407841?query=x&page=1") == "11407841")
 finally:

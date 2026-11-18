@@ -22,6 +22,7 @@ WORK = Path(tempfile.mkdtemp(prefix="hsbot_tailor_"))
 SAMPLE = TESTS / "sample_profile.json"
 os.environ["HSBOT_PROFILE"] = str(SAMPLE)
 os.environ["HSBOT_TAILORED_DIR"] = str(WORK / "tailored")
+os.environ["HSBOT_KEYWORD_DIR"] = str(WORK / "keywords")
 
 
 def fake_claude_command() -> str:
@@ -204,12 +205,52 @@ print(f"  a long profile from the same short plan ends at {text_bottom(big_fille
 check("a long profile fills the page", text_bottom(big_filled) > 0.85, f"{text_bottom(big_filled):.0%}")
 check("without spilling onto a second page", pdf_text(big_filled)[0] == 1)
 
+
+def skill_rows(pdf_path: Path) -> list[str]:
+    lines = pdf_text(pdf_path)[1].splitlines()
+    start = lines.index("SKILLS") + 1
+    rows = []
+    for row in lines[start:]:
+        if row.isupper():  # the next heading
+            break
+        rows.append(row)
+    return rows
+
+
+lone = []
+names = ["C++", "Verilog", "Oscilloscopes", "Soldering", "MATLAB", "Linux", "Git", "KiCad", "PCB layout", "SPI",
+         "I2C", "UART", "Logic analyzers", "Python", "Embedded C", "LTspice", "Multimeters", "Arduino", "FPGA", "VHDL"]
+for extra in range(4, len(names) + 1):
+    many = copy.deepcopy(profile)
+    many["skills"] = list(many["skills"]) + [{"name": f"{n} {extra}", "tags": []} for n in names[:extra]]
+    pdf = tailor.render_pdf(many, short_plan, WORK / f"skills_{extra}.pdf", job_text=EMBEDDED_JOB[1], title=EMBEDDED_JOB[0])
+    rows = skill_rows(pdf)
+    if len(rows) > 1 and "," not in rows[-1]:
+        lone.append((extra, rows[-1]))
+check("no skill is left alone on the last line of the skills", not lone, str(lone))
+
 old_folder = WORK / "tailored" / "5003-old-co"
 old_folder.mkdir(parents=True)
 (old_folder / "Jane_Doe_Resume.pdf").write_bytes(bare.read_bytes())
 (old_folder / "plan.json").write_text(json.dumps(tailor.asdict(short_plan)), encoding="utf-8")  # no layout version
-redrawn = tailor.tailor_resume("5003", EMBEDDED_JOB[0], "Old Co", EMBEDDED_JOB[1])
+redrawn = tailor.tailor_resume("5003", EMBEDDED_JOB[0], "Old Co", EMBEDDED_JOB[1], use_ai=False)
 check("a resume from the old layout is redrawn", "redrew" in " ".join(redrawn.notes), str(redrawn.notes))
+again = tailor.tailor_resume("5003", EMBEDDED_JOB[0], "Old Co", EMBEDDED_JOB[1], use_ai=False)
+check("and then reused as it is", "reused" in " ".join(again.notes), str(again.notes))
+real_ai_plan, asked = tailor.ai_plan, []
+tailor.ai_plan = lambda *a, **k: (asked.append(1), (None, "Claude is away"))[1]
+try:
+    remade = tailor.tailor_resume("5003", EMBEDDED_JOB[0], "Old Co", EMBEDDED_JOB[1], use_ai=True)
+finally:
+    tailor.ai_plan = real_ai_plan
+check("one the rules made while Claude was away is made again once Claude can be used",
+      asked and "reused" not in " ".join(remade.notes), str(remade.notes))
+check("courses are shown by title, with the ones still being taken starred",
+      tailor.coursework_line(["CMPE 310 (Systems Design and Programming, in progress)", "CMPE 212 (Digital Design)"])
+      == "Systems Design and Programming*, Digital Design (*in progress)")
+check("a bullet that repeats one already there is recognised",
+      tailor._same_point("Built an electric skateboard around an Arduino Uno, a BLDC motor, and an ESC, sourcing all of the parts.",
+                         "Designed and built an electric skateboard, integrating purchased motors and battery packs with custom parts."))
 check("the redrawn resume is filled", text_bottom(redrawn.path) >= text_bottom(filled) - 0.01,
       f"{text_bottom(redrawn.path):.0%}")
 
@@ -225,6 +266,80 @@ html = page.read_text(encoding="utf-8")
 check("resume column present", "Tailored resume" in html)
 check("relative link to the PDF", "../tailored/5001-sensor-co/Jane_Doe_Resume.pdf" in html)
 check("CSV includes the resume path", "Jane_Doe_Resume.pdf" in (listing.csv_path.read_text(encoding="utf-8")))
+
+# A reworded bullet isn't shown next to the one it came from.
+check("a bullet sharing a run of words with another is the same point", tailor._same_point(
+    "Manage each repair from customer intake to completion; expanding into computer repairs.",
+    "Grew the business to replace a restaurant job's income; expanding into computer repairs."))
+check("so is one that only changes 'apply' to 'applying'", tailor._same_point(
+    "Troubleshoot issues while applying hardware security to the CAN protocol.",
+    "Apply hardware security concepts to the CAN protocol used in embedded systems."))
+check("two different points about one project aren't", not tailor._same_point(
+    "Build and simulate CAN bus attacks using Verilog and C++ on FPGA hardware.",
+    "Develop attack logic in Verilog and run simulations to evaluate its behavior on CAN networks."))
+
+print()
+print("=" * 70)
+print("7. JOB KEYWORDS, FOR RESUMES THE STUDENT SENDS HIMSELF")
+print("=" * 70)
+KEYWORD_JOB = ("Embedded Verification Intern",
+               "Raspberry Pi sensors, UART and I2C drivers, SystemVerilog and UVM testbenches for PCIe, "
+               "Python scripting, Linux.")
+found = tailor.job_keywords(KEYWORD_JOB[1], KEYWORD_JOB[0])
+check("finds the posting's keywords", {"SystemVerilog", "UVM", "PCIe", "I2C", "UART"} <= set(found), str(found))
+
+with_kw = tailor.tailor_resume("7001", KEYWORD_JOB[0], "Chip Co", KEYWORD_JOB[1], use_ai=False, add_keywords=True)
+plain = tailor.tailor_resume("7001", KEYWORD_JOB[0], "Chip Co", KEYWORD_JOB[1], use_ai=False)
+kw_plan = json.loads((with_kw.path.parent / "plan.json").read_text(encoding="utf-8"))
+plain_plan = json.loads((plain.path.parent / "plan.json").read_text(encoding="utf-8"))
+check("keywords go on the skills line", "SystemVerilog" in kw_plan["skills"] and "UVM" in kw_plan["skills"], str(kw_plan["skills"]))
+check("and are listed to check", "SystemVerilog" in with_kw.added, str(with_kw.added))
+check("a skill the profile has isn't listed to check", "Python" not in with_kw.added)
+check_text = (with_kw.path.parent / tailor.CHECK_FILE).read_text(encoding="utf-8")
+check("CHECK BEFORE SENDING.txt names them", "SystemVerilog" in check_text and "check each one" in check_text.lower())
+check("still one page", pdf_text(with_kw.path)[0] == 1)
+check("kept apart from the resumes the appliers use",
+      with_kw.path.parent.parent == tailor.KEYWORD_DIR and tailor.OUT_DIR not in with_kw.path.parents)
+check("the usual resume has none of them", "SystemVerilog" not in plain_plan["skills"] and not plain.added)
+check("and no check file", not (plain.path.parent / tailor.CHECK_FILE).exists())
+
+fallback = tailor.rule_plan(profile, KEYWORD_JOB[1], KEYWORD_JOB[0])
+plan, reason = tailor.ai_plan(profile, KEYWORD_JOB[1], KEYWORD_JOB[0], "Chip Co", fallback, keywords=True)
+check("keyword plan returned", plan is not None, reason)
+if plan is not None:
+    bullets = {e["id"]: e["bullets"] for s in plan.sections for e in s["entries"]}
+    station = " ".join(bullets.get("weather-station", []))
+    desk = " ".join(bullets.get("campus-help-desk", []))
+    for note in plan.notes:
+        print(f"  note: {note}")
+    check("a posting term worked into a true bullet is kept", "I2C" in station, station)
+    check("and listed to check", "I2C" in plan.added_keywords and "Linux" in plan.added_keywords, str(plan.added_keywords))
+    check("its digit isn't taken for an invented number", "every 5 minutes" in station)
+    check("a duty with nothing to do with the entry is stopped", "PCIe controllers" not in station)
+    check("an invented number is still stopped", "500" not in station)
+    check("an award is still stopped", "award" not in desk.lower())
+    check("suggested skills from the posting go in", "SystemVerilog" in plan.skills and "UVM" in plan.skills, str(plan.skills))
+    check("a suggested tool the posting never names doesn't", "Kubernetes" not in plan.skills)
+
+import main  # noqa: E402
+from handshake import Job  # noqa: E402
+
+maker = main.ResumeTailor({"tailor_resume": True, "use_ai_for_tailoring": False, "profile_path": str(SAMPLE)})
+job = Job(job_id="7002", url="https://example.com/7002", title=KEYWORD_JOB[0], employer="Chip Co",
+          description=KEYWORD_JOB[1])
+sent_for_him = maker.for_job(job)
+for_his_list = maker.for_job(job, for_list=True)
+check("applications sent for him never get added keywords",
+      sent_for_him is not None and tailor.KEYWORD_DIR not in sent_for_him.parents)
+check("his list's resumes do", for_his_list is not None and tailor.KEYWORD_DIR in for_his_list.parents
+      and "SystemVerilog" in maker.last_added, str(maker.last_added))
+
+listing.add("7002", KEYWORD_JOB[0], "Chip Co", "Remote", "https://example.com/7002", 0.5, "Needs your own account",
+            resume_path=str(for_his_list), checks=maker.last_added)
+html = listing.save().read_text(encoding="utf-8")
+check("the list page shows what to check", "check: " in html and "SystemVerilog" in html)
+listing.add("7002", KEYWORD_JOB[0], "Chip Co", "Remote", "https://example.com/7002", 0.5, "Needs your own account")
+check("a later run that doesn't remake it keeps the checks", "SystemVerilog" in listing.get("7002")["resume_check"])
 
 print()
 print("=" * 70)

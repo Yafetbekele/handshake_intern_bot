@@ -162,7 +162,10 @@ def candidates(label: str, answers: list[dict[str, Any]]) -> list[dict[str, Any]
     if not text:
         return []
     words = len(text.split())
-    follow_up = bool(FOLLOW_UP.search(text) or NOT_THE_USUAL.search(text))
+    follow_up = bool(FOLLOW_UP.search(text))
+    # An answer saved with "unusual" was written for such a question ("Masters GPA" -> Not Applicable,
+    # "Have you previously worked at ...?" -> No), so its phrases still count there.
+    unusual = bool(NOT_THE_USUAL.search(text))
     exact: list[dict[str, Any]] = []
     partial: list[tuple[int, int, dict[str, Any]]] = []
     for position, answer in enumerate(answers):
@@ -174,7 +177,7 @@ def candidates(label: str, answers: list[dict[str, Any]]) -> list[dict[str, Any]
             if p == text:
                 best = -1
                 break
-            if answer.get("exact") or follow_up:
+            if answer.get("exact") or follow_up or (unusual and not answer.get("unusual")):
                 continue
             if words > int(answer.get("max_words", 99)):
                 continue
@@ -283,6 +286,12 @@ def education_answers(profile: dict[str, Any]) -> list[dict[str, Any]]:
     add(["gpa", "undergrad gpa", "undergraduate gpa", "cumulative gpa", "current gpa", "overall gpa"], school.get("gpa"))
     add(["class standing", "year in school", "current year in school", "academic standing", "class year"],
         school.get("standing"))
+    began = re.match(r"\s*([A-Za-z]+)\.?\s+(\d{4})", str(school.get("started") or ""))  # "August 2025"
+    if began:
+        add(["start date month"], began.group(1))
+        add(["start date year"], began.group(2))
+        add(["start date at current school", "start date at school", "education start date"],
+            f"{began.group(1)} {began.group(2)}")
     if when:
         add(["graduation month", "end date month", "expected graduation month"], when.group(1))
         add(["graduation year", "end date year", "expected graduation year", "year of graduation"], when.group(2))
@@ -416,6 +425,8 @@ APPLY_LINK = re.compile(
     r"start (your )?application|i.m interested)\s*$",
     re.IGNORECASE,
 )
+# Shown inside a company's own careers page, an Ashby posting keeps its form behind an Application tab.
+EMBEDDED_APPLY = re.compile(rf"{APPLY_LINK.pattern}|^\s*application\s*$", re.IGNORECASE)
 SUBMIT_PATTERNS = [
     re.compile(r"submit\s+(my\s+)?application", re.IGNORECASE),
     re.compile(r"^\s*submit\s*$", re.IGNORECASE),
@@ -853,6 +864,14 @@ class EmployerSite:
         return len(fields) >= 4 and bool(re.search(r"\bname\b", labels, re.IGNORECASE)) and bool(
             re.search(r"e-?mail", labels, re.IGNORECASE))
 
+    def leave_open(self, fresh: Any) -> None:
+        """Leave the form where it is for the student to finish, and carry on in a fresh tab."""
+        left = self.page
+        self._extra_tabs = [tab for tab in self._extra_tabs + [self.home] if tab is not left]
+        self.home = self.page = fresh
+        self.frame = fresh.main_frame
+        self._watched = None
+
     def _reset(self) -> None:
         for tab in self._extra_tabs:
             try:
@@ -892,17 +911,21 @@ class EmployerSite:
             return ""
 
     def _press_apply(self) -> bool:
-        """Some sites show the posting first, with the form behind an Apply button."""
+        """Some sites show the posting first, with the form behind an Apply button (or, inside a frame, a tab)."""
         target = None
-        for role in ("link", "button"):
-            try:
-                found = self.page.get_by_role(role, name=APPLY_LINK)
-                for index in range(min(found.count(), 5)):
-                    if found.nth(index).is_visible():
-                        target = found.nth(index)
-                        break
-            except Exception:
-                continue
+        main = self.page.main_frame
+        for frame in [main] + [f for f in self.page.frames if f != main]:
+            for role in ("link", "button", "tab"):
+                try:
+                    found = frame.get_by_role(role, name=APPLY_LINK if frame == main else EMBEDDED_APPLY)
+                    for index in range(min(found.count(), 5)):
+                        if found.nth(index).is_visible():
+                            target = found.nth(index)
+                            break
+                except Exception:
+                    continue
+                if target is not None:
+                    break
             if target is not None:
                 break
         if target is None:
@@ -1430,9 +1453,11 @@ class EmployerSite:
         seen = texts
         index = pick_option(texts, wanted) if texts and len(texts) <= 60 else None
         if index is None:
-            # Long or empty lists search as you type; a few leading words are enough.
+            # Long or empty lists search as you type; a few leading words are enough. The last word last:
+            # a list without "Computer Engineering" (Greenhouse's disciplines) still has "Engineering".
             words = wanted.split()
-            for typed in dict.fromkeys([wanted, " ".join(words[:3]), words[0] if words else ""]):
+            last = words[-1] if len(words) > 1 and len(words[-1]) >= 4 else ""
+            for typed in dict.fromkeys([wanted, " ".join(words[:3]), words[0] if words else "", last]):
                 if not typed:
                     continue
                 try:
@@ -1464,12 +1489,24 @@ class EmployerSite:
         label, control = item["label"], self._control(item)
         control.scroll_into_view_if_needed()
         seen: list[str] = []
-        for answer in self._saved(label)[:4]:
+        saved = self._saved(label)
+        for answer in saved[:4]:
             chosen, seen_now = self._pick_from_list(control, str(answer["value"]))
             seen = seen or seen_now
             if chosen is not None:
                 report.filled.append(f"{label[:60]}: {chosen[:60]}")
                 return True
+        # Further down the saved answers (a fallback like "LinkedIn"), only one the list as seen holds,
+        # so a long chain of them costs no typing.
+        if seen and len(seen) <= 60:
+            for answer in saved[4:]:
+                if pick_option(seen, str(answer["value"])) is None:
+                    continue
+                chosen, _ = self._pick_from_list(control, str(answer["value"]))
+                if chosen is not None:
+                    report.filled.append(f"{label[:60]}: {chosen[:60]}")
+                    return True
+                break
         if not (ask and item["required"]):
             return False
         if not seen:

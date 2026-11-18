@@ -63,6 +63,22 @@ def load(job_id: str) -> dict[str, Any] | None:
         return None
 
 
+def recent(job_id: str, hours: float) -> dict[str, Any] | None:
+    """The saved copy of a posting, if it was read within the last `hours` and can stand in for reading it again.
+
+    One whose way of applying couldn't be told, or that was closed or already
+    applied to, is always read again: that's what may have changed.
+    """
+    saved = load(job_id) if hours > 0 else None
+    if not saved or not saved.get("title") or saved.get("apply_kind") not in {"quick", "external"}:
+        return None
+    try:
+        age = datetime.now() - datetime.fromisoformat(str(saved.get("read_on")))
+    except ValueError:
+        return None
+    return saved if 0 <= age.total_seconds() <= hours * 3600 else None
+
+
 def import_tailored(tailored_dir: Path) -> int:
     """Postings saved next to tailored resumes before this store existed."""
     added = 0

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -484,6 +485,9 @@ class HandshakeSession:
         self.profile_dir = self._resolve_profile_dir(Path(profile_dir))
         self._playwright = None
         self._context = None
+        self._browser: Any = None
+        self._kept: list[Any] = []
+        self._left_before: list[Any] = []
         self.page: Page | None = None
         self._learned_template = ""
         # Answers the student typed during the last application, to save for next time.
@@ -532,6 +536,17 @@ class HandshakeSession:
         if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
             raise SystemExit(PLAYWRIGHT_HINT)
         self._playwright = sync_playwright().start()
+        self._browser = None
+        self._kept: list[Any] = []  # tabs left open for the student when this ends
+        self._left_before: list[Any] = []  # tabs an earlier run left open; never touched
+        if not self.config.get("headless"):
+            self._browser = self._standing_browser(bool(self.config.get("leave_code_tabs_open")))
+        if self._browser is not None:
+            self._context = self._browser.contexts[0]
+            self._context.set_default_timeout(20_000)
+            mine = [p for p in self._context.pages if p not in self._left_before]
+            self.page = mine[0] if mine else self._context.new_page()
+            return
         self._context = self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(self.profile_dir),
             headless=bool(self.config.get("headless", False)),
@@ -540,16 +555,105 @@ class HandshakeSession:
         self._context.set_default_timeout(20_000)
         self.page = self._context.pages[0] if self._context.pages else self._context.new_page()
 
+    def _standing_browser(self, start_one: bool) -> Any:
+        """A browser that stays open after this program ends, so tabs can be left in it.
+
+        One an earlier run left open (with forms waiting in it) is joined, since
+        only one browser can use the saved sign-in at a time. Otherwise one is
+        started when `start_one` says tabs may be left. None means the usual
+        browser, which closes with the program.
+        """
+        assert self._playwright is not None
+        port_file = self.profile_dir / "DevToolsActivePort"
+
+        def join() -> Any:
+            try:
+                port = int(port_file.read_text(encoding="utf-8").split()[0])
+                return self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}", timeout=5000)
+            except Exception:
+                return None
+
+        browser = join()
+        if browser is not None:
+            self._left_before = list(browser.contexts[0].pages) if browser.contexts else []
+            return browser if browser.contexts else None
+        if not start_one:
+            return None
+        try:
+            port_file.unlink()
+        except OSError:
+            pass
+        command = [self._playwright.chromium.executable_path, f"--user-data-dir={self.profile_dir}",
+                   "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
+                   "--window-size=1440,1000", "--disable-renderer-backgrounding",
+                   "--disable-backgrounding-occluded-windows", "about:blank"]
+        try:
+            if os.name == "nt":
+                # Started through "start", so it belongs to nobody and outlives this program
+                # (and whatever stops this program at the end of a night).
+                subprocess.Popen(["cmd", "/c", "start", ""] + command, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            return None
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            time.sleep(0.5)
+            browser = join() if port_file.exists() else None
+            if browser is not None and browser.contexts:
+                return browser
+        return None
+
+    def can_leave_open(self) -> bool:
+        """Whether tabs can be left in the browser after this program ends."""
+        return self._browser is not None
+
+    def keep_open(self, page: Any) -> bool:
+        """Leave this tab open for the student after the program ends. False when that can't be done."""
+        if self._browser is None or page is None:
+            return False
+        self._kept.append(page)
+        return True
+
+    def left_open(self) -> int:
+        """How many tabs are waiting in the browser for the student, from this run and earlier ones."""
+        count = 0
+        for page in self._left_before + self._kept:
+            try:
+                count += not page.is_closed()
+            except Exception:
+                pass
+        return count
+
     def close(self) -> None:
         try:
-            if self._context is not None:
+            if self._browser is not None:
+                self._leave_standing_browser()
+            elif self._context is not None:
                 self._context.close()
         finally:
             if self._playwright is not None:
                 self._playwright.stop()
             self._context = None
+            self._browser = None
             self._playwright = None
             self.page = None
+
+    def _leave_standing_browser(self) -> None:
+        """Close this run's own tabs; the browser stays only while tabs are waiting in it."""
+        try:
+            for page in list(self._context.pages):
+                if page not in self._left_before and page not in self._kept:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+            if not self.left_open():
+                self._browser.new_browser_cdp_session().send("Browser.close")
+        except Exception:
+            pass  # the student closed the browser themselves
 
     # ------------------------------------------------------------------ helpers
 
